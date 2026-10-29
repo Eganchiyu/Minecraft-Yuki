@@ -121,7 +121,8 @@ class Planner:
 
         self.metrics.attempts += 1
         raw = await self.llm.chat(
-            messages, purpose=purpose, max_tokens=300, temperature=0.2, budget=budget
+            messages, purpose=purpose, response_format={"type": "json_object"},
+            max_tokens=300, temperature=0.2, budget=budget
         )
         content = raw.get("content") or ""
         try:
@@ -135,7 +136,8 @@ class Planner:
                 {"role": "user", "content": f"上面的输出不合法：{exc}。只重新输出符合要求的 JSON 对象。"},
             ]
             raw2 = await self.llm.chat(
-                repair, purpose="l2_plan_repair", max_tokens=300, temperature=0.1, budget=budget
+                repair, purpose="l2_plan_repair", response_format={"type": "json_object"},
+                max_tokens=300, temperature=0.1, budget=budget
             )
             try:
                 return validate_plan(parse_json_object(raw2.get("content") or ""))
@@ -159,7 +161,8 @@ class Planner:
         ]
         try:
             raw = await self.llm.chat(
-                messages, purpose="l2_options", max_tokens=220, temperature=0.4, budget=budget
+                messages, purpose="l2_options", response_format={"type": "json_object"},
+                max_tokens=220, temperature=0.4, budget=budget
             )
             return validate_options(parse_json_object(raw.get("content") or ""))
         except (SchemaError, ValueError, LLMError, BudgetExceeded):

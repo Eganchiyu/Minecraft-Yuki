@@ -3,7 +3,7 @@
 // 硬校验：至少真的挪动过一段距离（位置是权威），不是原地假装走。
 const { clampInt } = require('../util')
 
-const MIN_TRAVEL = 3 // 格：走过这么远才算「逛到了」
+const MIN_TRAVEL = 15 // 格：走过这么远才算「逛到了」
 
 async function roam (args, ctx) {
   const { link, signal } = ctx

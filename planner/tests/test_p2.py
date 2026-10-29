@@ -55,6 +55,7 @@ check("① 13 类非法计划全部被 schema 拦截", rejected == len(BAD), f"{
 GOOD = {
     "mine 20": {"steps": [{"skill": "mine", "args": {"block": "cobblestone", "count": 20}, "on_fail": "abort"}]},
     "craft": {"steps": [{"skill": "craft", "args": {"item": "wooden_pickaxe", "count": 1}}]},
+    "goto 玩家": {"steps": [{"skill": "goto", "args": {"x": 1, "y": 2, "z": 3, "player": "xiaochi2788"}}]},
     "deposit 不带给坐标": {"steps": [{"skill": "deposit", "args": {}}]},
     "place 脚边": {"steps": [{"skill": "place", "args": {"item": "crafting_table"}}]},
     "eat 无参": {"steps": [{"skill": "eat", "args": {}}]},
@@ -159,9 +160,11 @@ class FakeLLM:
     def __init__(self, replies):
         self.replies = list(replies)
         self.calls = 0
+        self.requests = []
 
     async def chat(self, messages, *, purpose, budget=None, **kwargs):
         self.calls += 1
+        self.requests.append({"purpose": purpose, **kwargs})
         if budget is not None:
             budget.check()
             budget.charge_usage(10, 5)
@@ -175,7 +178,9 @@ async def planner_paths():
     # 第一次坏、修复成功
     p1 = Planner(FakeLLM(["不是 JSON", '{"steps":[{"skill":"mine","args":{"block":"stone","count":2}}]}']))
     steps = await p1.plan("挖石头", "未知")
-    check("⑥ 坏输出 → 一次修复成功", len(steps) == 1 and p1.metrics.repairs == 1 and p1.metrics.invalid == 1)
+    check("⑥ 坏输出 → 一次修复成功并启用 JSON mode",
+          len(steps) == 1 and p1.metrics.repairs == 1 and p1.metrics.invalid == 1
+          and all(call["response_format"] == {"type": "json_object"} for call in p1.llm.requests))
 
     # 两次都坏 → 拒收
     p2 = Planner(FakeLLM(["坏", "还坏"]))
@@ -194,12 +199,16 @@ async def planner_paths():
     # 重规划带 last_failure 也能出步骤
     p4 = Planner(FakeLLM(['{"steps":[{"skill":"mine","args":{"block":"oak_log","count":3}}]}']))
     steps = await p4.plan("挖石头", "未知", last_failure=facts)
-    check("⑥ 重规划路径可用", steps[0]["skill"] == "mine" and p4.metrics.attempts == 1)
+    check("⑥ 重规划路径可用并启用 JSON mode",
+          steps[0]["skill"] == "mine" and p4.metrics.attempts == 1
+          and p4.llm.requests[0]["response_format"] == {"type": "json_object"})
 
     # L2 出方案失败 → 代码兜底
     p5 = Planner(FakeLLM(["坏的方案"]))
     options = await p5.options("挖钻石", facts, "未知")
-    check("⑥ L2 方案失败 → 代码兜底 2 个方案", len(options) == 2 and p5.metrics.options_failed == 1)
+    check("⑥ L2 方案失败 → 代码兜底 2 个方案并启用 JSON mode",
+          len(options) == 2 and p5.metrics.options_failed == 1
+          and p5.llm.requests[0]["response_format"] == {"type": "json_object"})
 
 
 asyncio.run(planner_paths())

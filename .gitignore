@@ -38,3 +38,5 @@ configs/local.json
 
 # 忽略运行时的状态数据
 planner/state/
+
+planner/tests/__pycache__/

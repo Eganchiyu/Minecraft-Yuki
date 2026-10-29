@@ -182,7 +182,7 @@ class BotLink {
     bot.pathfinder.setGoal(goal)
   }
 
-  goalReached (timeoutMs, { stallMs = 10000, minMove = 0.4 } = {}) {
+  goalReached (timeoutMs, { stallMs = 10000, minMove = 0.4, watch } = {}) {
     const bot = this.bot
     return new Promise((resolve) => {
       let done = false
@@ -210,6 +210,13 @@ class BotLink {
       }
       // 卡住不动（A* 反复 partial 但从没走过去）也要能失败退出
       const watchdog = setInterval(() => {
+        if (watch) {
+          const reason = watch()
+          if (reason) {
+            finish(false, reason)
+            return
+          }
+        }
         if (!bot.entity) return
         const p = bot.entity.position
         if (!lastPos || p.distanceTo(lastPos) >= minMove) {

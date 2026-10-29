@@ -77,6 +77,7 @@ class LLMClient:
         *,
         purpose: str,
         tools: list[dict] | None = None,
+        response_format: dict[str, str] | None = None,
         max_tokens: int = 400,
         temperature: float = 0.8,
         retries: int = 1,
@@ -95,6 +96,8 @@ class LLMClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        if response_format is not None:
+            payload["response_format"] = response_format
 
         url = f"{LLM_BASE_URL.rstrip('/')}/chat/completions"
         headers = {"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"}
@@ -116,6 +119,7 @@ class LLMClient:
                     "max_tokens": max_tokens,
                     "temperature": temperature,
                     "tools": [((tool.get("function") or {}).get("name")) for tool in (tools or [])] or None,
+                    "response_format": response_format,
                     "thinking_disabled": DISABLE_THINKING,
                 },
             }

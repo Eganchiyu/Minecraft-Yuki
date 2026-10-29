@@ -74,6 +74,8 @@ def _normalize_step(step: Any, index: int) -> dict:
         }
         if args.get("range") is not None:
             clean["range"] = _int_range(args.get("range"), f"steps[{index}].args.range", 0, 3)
+        if args.get("player") is not None:
+            clean["player"] = _str(args.get("player"), f"steps[{index}].args.player", 16)
     elif skill == "follow":
         clean = {
             "player": _str(args.get("player"), f"steps[{index}].args.player", 16),
