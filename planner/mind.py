@@ -534,8 +534,8 @@ class Mind:
         if error.startswith("unsupported:"):
             feature = error.split(":", 1)[1].strip() or "这个功能"
             return (
-                f"（身体）你想「{intention_text}」，可是「{feature}」这个功能主人还没做出来，"
-                f"以后做好了再来吧～"
+                f"你想「{intention_text}」，可是「{feature}」这个功能主人还没做出来，"
+                f"去催催主人哥哥实装吧～"
             )
         skill = ""
         if "不在白名单" in error:
@@ -543,16 +543,16 @@ class Mind:
             skill = match.group(1) if match else ""
         if skill:
             return (
-                f"（身体）你说要「{intention_text}」，可是这件事人家还不会做——"
+                f"你说要「{intention_text}」，可是这件事人家还不会做——"
                 f"主人还没把「{skill}」这个功能做出来，等以后做好了再来吧。"
             )
         if error.startswith("sidecar_unreachable"):
-            return f"（身体）你许愿「{intention_text}」，但身体现在没连上，等一会儿再试。"
+            return f" 但身体现在没连上，等一会儿再试。"
         if error.startswith("budget_exceeded"):
-            return f"（身体）「{intention_text}」这件事太费神了，今天先不折腾了。"
+            return f"「{intention_text}」这件事太费神了，可能要更好地规划一下。"
         if error.startswith("plan_rejected") or error.startswith("llm:"):
-            return f"（身体）「{intention_text}」这件事人家想不出该怎么做，先换个目标吧。"
-        return f"（身体）「{intention_text}」没派成，原因是：{error}"
+            return f"「{intention_text}」这件事人家想不出该怎么做，先换个目标吧。"
+        return f"「{intention_text}」没派成，原因是：{error}"
 
     def _check_stuck(self, state: dict, now: float) -> None:
         """回调丢了/侧车重启过，我们会以为她一直在干活。身体空闲超过阈値就复位。"""
@@ -601,24 +601,24 @@ class Mind:
         if status == "done":
             return f"刚做完{name}：{summary}" if summary else f"刚做完{name}"
         if status == "aborted":
-            return f"{name}被打断了"
+            return f"{name}被打断了喵，等一小会再试试"
         return f"{name}没做成：{summary}"
 
     def _result_event(self, status: str, summary: str, text: str) -> str:
         mapping = {"done": "完成了", "failed": "没做成", "aborted": "被打断了"}
         name = f"「{text}」" if text else "刚那件事"
-        body = f"（身体）{name}{mapping.get(status, status)}"
+        body = f"{name}{mapping.get(status, status)}"
         if summary:
             body += f"：{summary}"
         return body + "。"
 
     def _event_text(self, kind: str, detail: dict) -> str:
         names = {
-            "hurt": "你被打了",
-            "low_health": "你血不多了",
+            "hurt": "你掉血了喵",
+            "low_health": "你血条过低了",
             "lava": "你脚边是岩浆",
             "void": "你快掉进虚空了",
-            "hungry": "你饿得不行",
+            "hungry": "你处于饥饿状态",
         }
         label = names.get(kind, kind or "出了点事")
         extra = ""

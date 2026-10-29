@@ -1,7 +1,7 @@
 # planner/schema.py —— L2 输出的硬校验。非法即拒收，绝不把脏 JSON 送进执行器。
 from typing import Any
 
-MAX_STEPS = 5
+MAX_STEPS = 15
 ON_FAIL = {"retry", "abort", "skip"}
 SKILLS = {"mine", "goto", "follow", "craft", "deposit", "attack", "eat", "equip", "place", "roam", "drop", "open"}
 EQUIP_SLOTS = {"hand", "off-hand", "head", "torso", "legs", "feet"}

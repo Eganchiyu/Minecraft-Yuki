@@ -144,7 +144,7 @@ def status_block(state: dict[str, Any], stale: bool = False) -> str:
     if stale:
         note = (note + "；状态可能过期").strip("；")
     return (
-        "【当前状态·仅本次有效，不要复述此段】\n"
+        "【当前状态】\n"
         f"status={status}\n"
         f"task={task}\n"
         f"note={note or '无'}\n"
