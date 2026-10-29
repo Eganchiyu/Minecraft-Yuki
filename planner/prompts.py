@@ -178,3 +178,18 @@ def options_user(text: str, state_text: str, facts_text: str, facts_json: str) -
 
 def summary_user(lines: str) -> str:
     return f"{lines}\n下面是刚才这段时间的对话和行动。保持性格特点，以第一人称口吻中文记成小本本，保留值得以后想起的事。这将成为Yuki记忆重要的一部分。"
+
+
+def recall_block(items: list[dict[str, Any]]) -> str:
+    """把召回到的旧回忆压成一条 system（形态照抄 Yuki 的「【回忆】」注入）。"""
+    lines = []
+    for item in items or []:
+        text = " ".join(str(item.get("content") or "").split())
+        if not text:
+            continue
+        at = " ".join(str(item.get("at") or "").split())
+        lines.append(f"· {at} {text}" if at else f"· {text}")
+    if not lines:
+        return ""
+    return "【回忆】这个世界里以前发生过这些事（是过去，不是现在）：\n" + "\n".join(lines)
+

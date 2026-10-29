@@ -279,6 +279,34 @@ free -g | head -2
 | 27 | `/state` 必须带**附近玩家真实 ID + 坐标**；「过来」= `goto` 玩家坐标，「跟着我」= `follow` 真实 ID，L2 禁止用中文称呼猜名字 | 实测 L2 曾把「come here」翻成 `follow 小池2788`，中文昵称不是游戏 ID，直接 `player_not_visible` |
 | 28 | **L2 是中枢，掌握的世界事实可以比 L1 多**：位置、血量、饥饿、背包、附近玩家 ID/坐标都进 L2 的 state；L1 仍只拿 PRD 3.4 的四字段状态。L1 是「玩家大脑」，不是数据库 | 机主确认：中枢多知道点正常，人格层保持干净 |
 | 29 | `follow` 不给 `seconds` = **持续跟随**（直到被取消/抢占/跟丢，1h 兜底）；跟随时 L2 保持占用，L1 可随时改派；任务终态释放该委托的工作记忆 | 机主定调：跟随就该一直跟，L2 阻塞没关系，L1 随时能改任务；结束后不该留着上一条的上下文 |
+| 30 | **世界 = 记忆的作用域**：记忆/对话/状态按世界分区落 `planner/state/worlds/<world>/`，注入的回忆天然只来自当前世界；world 取值优先级 `MC_WORLD` > `mc.world` > `host_port` | 机主要求：换世界就换记忆，回忆不能串味；LAN 端口会变，所以世界名能手写 |
+| 31 | 召回照搬 Yuki 的 `memory/rag.py`：**向量池宽进 + jieba 关键词覆盖率打捞 + 时间衰减重排**，融合后取 top-3 压成一条 `【回忆】` system 注入；JSONL 是唯一真相，向量索引可重建，缺依赖自动退化为纯关键词 | 机主指定照搬她那套效果好的算法；JSONL 能 grep 能手工修，索引坏了不丢数据 |
+| 32 | 对话历史**全量落盘**（`history.json`，tmp + `os.replace` 原子替换，上限 400 条），prompt 仍只喂最近 3 轮；日记触发改成「自上次总结后满 12 轮」 | 机主要求关闭程序不清记忆；窗口仍受控，防止上下文膨胀 |
+
+---
+
+## 4.5 记忆与上下文持久化（2026-10-30 落地）
+
+```
+planner/state/worlds/<world>/          # 一个世界一个目录，world 来自 mc.world / MC_WORLD
+├── memory.jsonl   # 日记 + 事件（唯一真相，可 grep 可手改）
+├── history.json   # 对话历史（重启接着上次说）
+├── mind.json      # mode / note / rest_until 等状态
+├── places.json    # 箱子表（notes.places_enabled 控制，默认关）
+└── chroma/        # 向量索引（可删，warmup 自动重建）
+```
+
+- **写入**：`mind._remember()` 每轮落 `history.json`；`_maybe_summarize()` 自上次总结后满 `autonomy.summary_after`(12)
+  轮就让她把最近 12 条压成一条日记写进 `memory.jsonl`；世界事件也写（`kind=event`）。
+  同一天同一句话只留一条（简易去重）。
+- **召回**：每轮 `memory.recall(query)` → 向量池（top 24）+ 关键词池（jieba 词权覆盖率当保底分）
+  → 关键词加成 + 时间衰减（半衰期 60 天、下限 0.55）→ 取 `memory.inject`(3) 条 → `prompts.recall_block()`
+  压成一条 system 插在人格之后。自己待着（idle）时拿上一句人话当锚点，不拿「周围静下来了」去检索。
+- **代价**：embedding 走 `sentence-transformers`（模型 `/home/asumi/Yuki/models/text2vec-base-chinese`，
+  与 Yuki 共用），planner 进程 RSS 约 1.0 GB，启动多约 6–8 秒（`/health` 会晚一点起来，`world-up.sh` 的 90 秒等待足够）。
+  内存紧张就设 `memory.vector=false`，退化为纯关键词召回，召回质量下降但零依赖。
+- **验收**：`planner/tests/test_memory.py` 43 项（含真向量索引、重启接话、世界隔离）；
+  线上看 `GET /stats` 的 `world` / `memory` / `memory_vector` / `recall`，`GET /health` 带 `world`。
 
 ---
 
@@ -347,8 +375,14 @@ free -g | head -2
 │   ├── llm.py             # OpenAI 兼容客户端（超时/重试/记账/disable_thinking）
 │   ├── prompts.py         # 人设 + 规划 + 重规划 + 方案 prompt、status_block
 │   ├── schema.py          # 步骤与方案硬校验（白名单 + 参数范围）
-│   ├── tests/test_p2.py   # P2 单测（28 项）
-│   └── config.py          # 读 configs/local.json（含 budget 段）
+│   ├── mind.py            # L1 心智：聊天 + intention 工具 + 自主节拍 + 记忆注入
+│   ├── memory.py          # 世界记忆：JSONL 真相 + 双池召回（向量 + 关键词）+ 时间衰减
+│   ├── history.py         # 对话持久化（原子替换，重启接话）
+│   ├── notes.py           # 箱子表（按坐标 upsert，默认关）
+│   ├── tests/test_p2.py   # P2 单测（30 项）
+│   ├── tests/test_memory.py # 记忆单测（43 项：分区/召回/衰减/重启）
+│   ├── state/worlds/<world>/ # 每世界的记忆、对话、状态、向量索引（gitignore）
+│   └── config.py          # 读 configs/local.json（含 mc.world / memory 段）
 ├── server/                # 主服 26.1.2，:25565，生存，离线（也是 M0 验收场地）
 ├── server-test/           # 实验场 26.1.2，:25566，creative + op
 └── yuki-bot/              # Node 侧

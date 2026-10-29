@@ -149,3 +149,16 @@
 - 机主指正 `INSTRUCTION`（第二条 system）不需要了，已删变量及其注释；`grep INSTRUCTION` 全仓无残留引用。
 - 验证：`py_compile` 全通过；`app.py` 起服监听 8791 正常，自主 tick 正常调模型；`planner/tests/test_p2.py` 30/30。
 - 当前状态：planner 可正常起；世界仍是停的（25565/8790/8791 全空），机主打算用 HMCL 单人世界「对局域网开放」+ `MC_PORT=<端口>` 让她进，待机主自己开世界。
+
+## 2026-10-30 凌晨 记忆模块改造：世界分区 + 对话持久化 + Yuki 同款召回
+
+- 机主授意：照搬 `/home/asumi/Yuki` 的日记+RAG+召回，接进本项目的记忆模块；记忆按世界区分，注入只来自当前世界；关掉程序不能丢记忆。
+- 三个选择（机主定）：① 混合召回（向量 + 关键词双池，照搬 Yuki）② world 手写在 `mc.world`，缺省回退 `host_port` ③ 本轮只做「世界分区 + 对话持久化 + 召回注入」，不做 supersedes/metadata 演化链。
+- 新增 `planner/history.py`：`HistoryStore`（tmp + `os.replace` 原子替换、上限 `memory.history_max`=400 条、脏文件降级空历史）。
+- 重写 `planner/memory.py`：JSONL 仍是唯一真相，`chroma` 索引只是可重建加速层（`warmup()` 对齐、缺依赖退化纯关键词）；召回 = 向量池宽进(24) + jieba 关键词覆盖率打捞 + 关键词加成 + 时间衰减（半衰期 60 天、下限 0.55）；同日同文去重。
+- `planner/config.py`：`WORLD` / `STATE_DIR=state/worlds/<world>/`（memory/history/mind/places/chroma 全分区）、`MEMORY` 段（enabled/vector/embed_model/inject/pool/keep/history_max/half_life_days/recency_floor）；`CHAT_ID=mc:<world>`。
+- `planner/mind.py`：启动 `_warm_memory()`（线程里建索引，别卡事件循环）；每轮 `prompts.recall_block()` 压成一条 `【回忆】` system 插在人格之后；`_remember()` 落盘；`_maybe_summarize()` 改「自上次总结后满 12 轮」触发且不再截断历史；`/stats` 加 `world`/`memory_vector`/`recall`，`/health` 加 `world`。
+- 迁移：老 `planner/state/{memory.jsonl,mind.json,places.json}`（234 条日记）已移入 `state/worlds/world/`；`configs/local.json` 与 example 补 `mc.world="world"`。
+- 验收：新增 `planner/tests/test_memory.py` 43 项全过（含真向量索引建库/自愈、世界隔离、重启接话、回忆注入不污染历史）；`test_p2.py` 30 过 1 挂（「13 类非法计划拦截」，改动前后一致，是既有问题）。
+- 实测（planner 单独起，无 MC 服）：`memory_ready world=world vector=True entries=234`；问「还记得我们之前砍木头吗」→ 召回 3 条砍木头日记，她答「当然记得啦！人家砍了好多木头…」；重启后 `history=5` 接上，再问「刚才你说了什么呀」答得上。
+- 已知代价：embedding 栈让 planner RSS 约 1.0 GB、启动多 6–8 秒；内存紧就把 `memory.vector` 设 false。

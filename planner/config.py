@@ -19,6 +19,8 @@ _LLM = _RAW.get("llm") or {}
 _PLANNER = _RAW.get("planner") or {}
 _SIDECAR = _RAW.get("sidecar") or {}
 _BUDGET = _RAW.get("budget") or {}
+_MC = _RAW.get("mc") or {}
+_MEMORY = _RAW.get("memory") or {}
 
 
 def _int(value, default: int) -> int:
@@ -48,7 +50,21 @@ LLM_TIMEOUT_S = float(os.environ.get("LLM_TIMEOUT_S", _LLM.get("timeout_s", 45))
 # 冻结决策：所有层 disable_thinking=true（deepseek 端点无该参数，保留开关位以便换供应商）
 DISABLE_THINKING = bool(_LLM.get("disable_thinking", True))
 
-CHAT_ID = "mc:world"
+# 世界身份：记忆/对话/状态全部按世界分区，注入的回忆天然只来自当前世界。
+# 取值优先级：MC_WORLD 环境变量 > configs.local.json 的 mc.world > host:port。
+# 换了世界（或换了 LAN 端口）就换一个目录，旧世界的记忆不会被串进来。
+MC_HOST = str(os.environ.get("MC_HOST") or _MC.get("host", "127.0.0.1"))
+MC_PORT = _int(os.environ.get("MC_PORT"), _MC.get("port", 25565))
+
+
+def _world_key(raw: str) -> str:
+    """世界名当目录名用：只留字母数字和 . _ -，其余压成 _。"""
+    cleaned = "".join(ch if (ch.isalnum() or ch in "._-") else "_" for ch in str(raw or "").strip())
+    return cleaned.strip("._") or "default"
+
+
+WORLD = _world_key(os.environ.get("MC_WORLD") or _MC.get("world") or f"{MC_HOST}_{MC_PORT}")
+CHAT_ID = f"mc:{WORLD}"
 SCENE = "mc"
 HISTORY_KEEP = 6            # 轮内层：最近 6 条（3 轮）
 STATUS_FRESH_S = 3.0        # 状态超过 3 秒标"可能过期"
@@ -79,14 +95,34 @@ TRACE_ENABLED = bool(_TRACE.get("enabled", True))
 TRACE_PATH = Path(_TRACE.get("path") or (ROOT / "planner" / "state" / "trace.jsonl"))
 TRACE_MAX_BYTES = _int(_TRACE.get("max_bytes"), 12 * 1024 * 1024)
 
-STATE_DIR = Path(_AUTONOMY.get("state_dir") or (ROOT / "planner" / "state"))
+BASE_STATE_DIR = Path(_AUTONOMY.get("state_dir") or (ROOT / "planner" / "state"))
+# 每个世界一个目录：memory.jsonl（日记/事件）、history.json（对话）、mind.json（状态）、chroma/（向量索引）
+STATE_DIR = BASE_STATE_DIR / "worlds" / WORLD
 MEMORY_PATH = STATE_DIR / "memory.jsonl"
+HISTORY_PATH = STATE_DIR / "history.json"
 MIND_STATE_PATH = STATE_DIR / "mind.json"
+VECTOR_PATH = STATE_DIR / "chroma"
 # 世界知识表：哪个箱子有什么、在哪（由 L3 每次开容器上报，按坐标覆盖）
 # 目前先关掉：places_enabled=false 时不记录也不注入，代码留着随时开
 _NOTES = _RAW.get("notes") or {}
 NOTES_ENABLED = bool(_NOTES.get("places_enabled", False))
 NOTES_PATH = STATE_DIR / "places.json"
+
+# 记忆（照搬 Yuki 的日记召回：向量宽进 + 关键词打捞 + 时间衰减重排）
+MEMORY = {
+    "enabled": bool(_MEMORY.get("enabled", True)),
+    # 关掉只用关键词召回（零依赖、启动快），排查 embedding 问题时用
+    "vector": bool(_MEMORY.get("vector", True)),
+    "embed_model": Path(
+        str(_MEMORY.get("embed_model") or (ROOT.parent / "Yuki" / "models" / "text2vec-base-chinese"))
+    ),
+    "inject": _int(_MEMORY.get("inject"), 3),              # 每轮注入几条回忆
+    "pool": _int(_MEMORY.get("pool"), 24),                 # 语义池宽进多少条
+    "keep": _int(_MEMORY.get("keep"), 600),                # memory.jsonl 上限
+    "history_max": _int(_MEMORY.get("history_max"), 400),  # history.json 上限（条消息）
+    "half_life_days": _float(_MEMORY.get("half_life_days"), 60.0),
+    "recency_floor": _float(_MEMORY.get("recency_floor"), 0.55),
+}
 
 # P2 单任务预算：一条委托从听见到最终汇报的总开销上限。
 # LLMClient 每次真实调用记账，超了立即降级成一句人话，不再继续烧。

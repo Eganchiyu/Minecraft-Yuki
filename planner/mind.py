@@ -7,6 +7,8 @@
 #   · L2 的结果以普通消息注入上下文（「（身体）完成了：挖到 3 块圆石」），她据此再决定。
 #   · 状态（坐标/血量/背包/附近/身体在做什么）与「小本本」（正在做什么/刚做过什么）
 #     只作为一行附在本轮 user 消息后面，单槽临时，不进历史。
+#   · 记忆按世界分区（config.STATE_DIR = state/worlds/<世界>/）：对话落 history.json，
+#     日记/事件落 memory.jsonl，每轮按当前话题召回几条压成一条 system 注入（【回忆】）。
 import asyncio
 import json
 import logging
@@ -18,6 +20,7 @@ import config
 import prompts
 from budget import BudgetExceeded
 from facts import extract_facts, facts_text, options_to_text
+from history import HistoryStore
 from l1 import Chain, Planner, SidecarClient, state_text
 from llm import LLMClient, LLMError
 from memory import MemoryStore
@@ -82,9 +85,23 @@ class Mind:
         self.llm = llm
         self.sidecar = sidecar
         self.planner = planner
-        self.memory = MemoryStore(config.MEMORY_PATH)
+        self.memory = MemoryStore(
+            config.MEMORY_PATH,
+            vector_path=config.VECTOR_PATH,
+            embed_model=config.MEMORY["embed_model"],
+            vector=config.MEMORY["vector"],
+            keep=config.MEMORY["keep"],
+            pool=config.MEMORY["pool"],
+            inject=config.MEMORY["inject"],
+            half_life_days=config.MEMORY["half_life_days"],
+            recency_floor=config.MEMORY["recency_floor"],
+        )
         self.notes = NoteStore(config.NOTES_PATH)
-        self.history: list[dict] = []
+        self.history_store = HistoryStore(config.HISTORY_PATH, config.MEMORY["history_max"])
+        self.history: list[dict] = self.history_store.load()
+        self._since_summary = 0
+        self._memory_ready = False
+        self._last_recall: list[dict] = []
         self.chains: dict[str, Chain] = {}
         self.chain_log: list[dict] = []
         self.last_state: dict = {}
@@ -101,9 +118,25 @@ class Mind:
 
     # ================= 生命周期 =================
     async def start(self) -> None:
+        await self._warm_memory()
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
-            log.info("mind_start", mode=self.state.get("mode"), note=self.state.get("note"))
+            log.info(
+                "mind_start", world=config.WORLD, mode=self.state.get("mode"),
+                history=len(self.history), memory=self.memory.count(), note=self.state.get("note"),
+            )
+
+    async def _warm_memory(self) -> None:
+        """启动时把向量索引对齐一次：torch 的 import 有好几秒，放在线程里做，别卡事件循环。"""
+        try:
+            self._memory_ready = await asyncio.to_thread(self.memory.warmup)
+        except Exception as exc:
+            self._memory_ready = False
+            log.warning("memory_warmup_failed", error=str(exc))
+        log.info(
+            "memory_ready", world=config.WORLD, vector=self._memory_ready,
+            entries=self.memory.count(), notes="; ".join(self.memory.notes) or "ok",
+        )
 
     async def stop(self) -> None:
         if self._task:
@@ -197,8 +230,11 @@ class Mind:
             "current": self.state.get("current"),
             "note": self.state.get("note"),
             "next_tick_at": self.state.get("next_tick_at"),
+            "world": config.WORLD,
             "history_len": len(self.history),
             "memory": self.memory.count(),
+            "memory_vector": self._memory_ready,
+            "recall": self._last_recall,
             "daily": dict(self._daily),
             "places": self.notes.count(),
             "metrics": dict(self.metrics),
@@ -225,8 +261,11 @@ class Mind:
                 places = ""
         status_line = prompts.state_line(current_state, self.state.get("note"), stale, places)
 
-        messages = [
-            {"role": "system", "content": prompts.PERSONA},
+        messages = [{"role": "system", "content": prompts.PERSONA}]
+        memory_block = prompts.recall_block(self._recall(user_text, kind))
+        if memory_block:
+            messages.append({"role": "system", "content": memory_block})
+        messages += [
             *self.history[-config.HISTORY_KEEP * 2:],
             {"role": "user", "content": f"{user_text}\n{status_line}"},
         ]
@@ -636,16 +675,55 @@ class Mind:
 
     def _remember(self, user_text: str, say: str) -> None:
         """历史只存「人说的话」和她真正说出的话；状态行与占位语都不进历史。
-        没说话就不写 assistant 消息——否则模型会模仿「（没说话）」这类占位文字。"""
-        clean_user = re.sub(r"\s*（系统附注·.*?）\s*$", "", user_text, flags=re.DOTALL).strip()
+        没说话就不写 assistant 消息——否则模型会模仿「（没说话）」这类占位文字。
+        全量落盘（最多 history_max 条），prompt 里仍然只喂最近几轮。"""
+        clean_user = self._clean_user_text(user_text)
         self.history.append({"role": "user", "content": clean_user})
         if say:
             self.history.append({"role": "assistant", "content": say})
-        if len(self.history) > config.HISTORY_KEEP * 2:
-            del self.history[: len(self.history) - config.HISTORY_KEEP * 2]
+        self._since_summary += 1
+        if len(self.history) > int(config.MEMORY["history_max"]):
+            del self.history[: len(self.history) - int(config.MEMORY["history_max"])]
+        self.history_store.save(self.history)
+
+    @staticmethod
+    def _clean_user_text(user_text: str) -> str:
+        return re.sub(r"\s*（系统附注·.*?）\s*$", "", str(user_text or ""), flags=re.DOTALL).strip()
+
+    def _recall(self, user_text: str, kind: str) -> list[dict]:
+        """召回当前世界的旧回忆。任何异常都不许影响这一轮对话。"""
+        if not config.MEMORY["enabled"] or not self.memory.count():
+            self._last_recall = []
+            return []
+        query = self._recall_query(user_text, kind)
+        if not query:
+            self._last_recall = []
+            return []
+        try:
+            items = self.memory.recall(query)
+        except Exception as exc:
+            log.warning("recall_failed", error=str(exc))
+            self._last_recall = []
+            return []
+        self._last_recall = [
+            {"at": item.get("at", ""), "text": item.get("content", "")[:40], "score": round(item.get("score", 0.0), 3)}
+            for item in items
+        ]
+        if items:
+            log.info("recall", count=len(items), top=items[0].get("debug", "")[:60])
+        return items
+
+    def _recall_query(self, user_text: str, kind: str) -> str:
+        """自己待着（idle）时没有新话题，就拿上一句人话当锚点，别拿「周围静下来了」去检索。"""
+        if kind != "idle":
+            return self._clean_user_text(user_text)
+        for item in reversed(self.history):
+            if item.get("role") == "user" and item.get("content"):
+                return str(item["content"])
+        return str(self.state.get("note") or "")
 
     async def _maybe_summarize(self) -> None:
-        if len(self.history) < int(config.AUTONOMY["summary_after"]):
+        if self._since_summary < int(config.AUTONOMY["summary_after"]):
             return
         lines = "\n".join(f"{item['role']}：{item['content']}" for item in self.history[-12:])
         try:
@@ -663,7 +741,7 @@ class Mind:
         diary = sanitize_say(raw.get("content") or "")
         if diary:
             self.memory.add("diary", diary)
-        self.history = self.history[-config.HISTORY_KEEP:]
+        self._since_summary = 0
 
     def _release_chain(self, chain: Chain | None) -> None:
         if chain is None:

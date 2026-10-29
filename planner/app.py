@@ -27,7 +27,13 @@ mind = Mind(llm, sidecar, planner)
 
 async def handle_health(request: web.Request) -> web.Response:
     return web.json_response(
-        {"ok": True, "llm_model": config.LLM_MODEL, "sidecar": config.SIDECAR_URL, "autonomy": config.AUTONOMY}
+        {
+            "ok": True,
+            "world": config.WORLD,
+            "llm_model": config.LLM_MODEL,
+            "sidecar": config.SIDECAR_URL,
+            "autonomy": config.AUTONOMY,
+        }
     )
 
 
