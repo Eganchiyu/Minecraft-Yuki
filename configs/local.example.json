@@ -1,0 +1,31 @@
+{
+  "mc": {
+    "host": "127.0.0.1",
+    "port": 25565,
+    "username": "Yuki",
+    "version": "26.1"
+  },
+  "sidecar": {
+    "host": "127.0.0.1",
+    "port": 8790
+  },
+  "planner": {
+    "host": "127.0.0.1",
+    "port": 8791,
+    "url": "http://127.0.0.1:8791",
+    "sidecar_url": "http://127.0.0.1:8790"
+  },
+  "llm": {
+    "base_url": "https://api.deepseek.com/v1",
+    "api_key": "PUT_YOUR_KEY_HERE",
+    "model": "deepseek-flash",
+    "disable_thinking": true,
+    "timeout_s": 45
+  },
+  "budget": {
+    "max_calls": 10,
+    "max_tokens": 12000,
+    "max_wall_s": 300,
+    "max_retries": 2
+  }
+}

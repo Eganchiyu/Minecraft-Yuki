@@ -1,2 +1,40 @@
 .hmcl/
 .minecraft/
+yuki-bot/node_modules/
+planner/__pycache__/
+
+# ===== Minecraft 服务端通用忽略 =====
+# 忽略核心 jar 包和依赖库
+**/server.jar
+**/libraries/
+**/versions/
+**/cache/
+
+# 忽略世界存档（如果你需要备份存档，建议单独打包，不要放 Git 里）
+**/world/
+**/world_nether/
+**/world_the_end/
+
+# 忽略日志
+**/logs/
+*.log
+
+# 忽略服务端运行时的状态记录文件
+**/usercache.json
+**/banned-ips.json
+**/banned-players.json
+**/ops.json
+**/whitelist.json
+
+# ===== Node.js (yuki-bot) =====
+**/node_modules/
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+
+# 忽略本地真实配置文件（保留 local.example.json）
+configs/local.json
+
+# 忽略运行时的状态数据
+planner/state/
