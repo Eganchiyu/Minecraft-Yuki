@@ -670,6 +670,7 @@ class Mind:
             "reflex_defend": "周围有怪，你自己冲上去打了",
             "reflex_flee": "打不过或者太危险，你自己先撤了",
             "reflex_over": "刚才那阵过去了",
+            "reflex_mlg": "你从高处摔下来了，自己放了水接住",
         }
         label = names.get(kind, kind or "出了点事")
         extra = ""
@@ -678,6 +679,12 @@ class Mind:
                 extra = f"，血量{detail.get('health')}"
             if detail.get("food") is not None:
                 extra += f"，饥饿{detail.get('food')}"
+            if kind == "reflex_mlg" and detail.get("dist") is not None:
+                extra += f"，离地 {detail.get('dist')} 格"
+                if detail.get("reclaimed"):
+                    extra += "，桶也收回来了"
+                elif detail.get("placed"):
+                    extra += "，桶留在地上了"
             if detail.get("killed"):
                 extra += f"，打掉了 {detail['killed']} 只"
             elif detail.get("reason"):

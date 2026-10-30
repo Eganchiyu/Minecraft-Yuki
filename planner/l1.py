@@ -235,7 +235,8 @@ def state_text(state: dict) -> str:
     # 反射状态：身体自己在打架/逃跑时，规划要走远的活会当场被打断——先告诉她
     reflex = state.get("reflex")
     if reflex and reflex != "idle":
-        label = {"defend": "正在和怪打", "flee": "正在撤", "recover": "在吃东西回血"}.get(reflex, reflex)
+        label = {"defend": "正在和怪打", "flee": "正在撤", "recover": "在吃东西回血",
+                 "mlg": "正在落地自救"}.get(reflex, reflex)
         body += f"；身体状态：{label}（这是身体自己的反应，不是任务）"
     return body
 

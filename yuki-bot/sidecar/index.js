@@ -31,6 +31,13 @@ function emit (event) {
       detail: { from: event.from, reason: event.reason, ...(event.detail || {}) }
     }, 7000).catch((err) => log.warn('reflex_forward_failed', { error: err.message }))
   }
+  if (event.type === 'reflex_mlg') {
+    postJson(`${config.plannerUrl}/event`, {
+      kind: 'reflex_mlg',
+      severity: event.severity,
+      detail: { dist: event.dist, placed: event.placed, landed: event.landed, reclaimed: event.reclaimed, error: event.error }
+    }, 7000).catch((err) => log.warn('reflex_forward_failed', { error: err.message }))
+  }
   if (event.type === 'reflex_over') {
     postJson(`${config.plannerUrl}/event`, {
       kind: 'reflex_over',

@@ -193,7 +193,8 @@ def world_block(state: dict[str, Any]) -> str:
     reflex = state.get("reflex")
     if reflex and reflex != "idle":
         # 反射压过任务：这时候说「正在做：mine」会误导她
-        body = {"defend": "正跟怪打", "flee": "正在撤", "recover": "在吃东西回血"}.get(reflex, str(reflex))
+        body = {"defend": "正跟怪打", "flee": "正在撤", "recover": "在吃东西回血",
+                "mlg": "正在落地自救"}.get(reflex, str(reflex))
     return f"位置{pos_text}；血量{health}/饥饿{food}；背包：{inv_text}；附近：{players_text}；身体{body}"
 
 

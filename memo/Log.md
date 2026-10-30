@@ -299,3 +299,32 @@ severity：flee=8（会叫醒）、defend=5、recover/idle=3（知会档，不�
 - 皮肤文件放 `CustomSkinLoader/LocalSkin/skins/Yuki-chan.png`（**不是 `Yuki`**，`configs/local.json` 里 mc.username 是 `Yuki-chan`）。CSL 的 `LocalSkin` 是内置默认 profile（priority 710），默认 loadlist 就带，不用手写 `CustomSkinLoader.json`。
 - 皮肤校验：64×64、RGBA，臂区 14px + 右侧 2px 透明 padding，是 **slim/Alex** 模型；CSL 自动判定模型能对上。
 - 待验：启动客户端看 Yuki 是否变成该皮肤（本地皮肤只对自己可见，其他玩家仍看到默认皮肤）。
+
+## 2026-10-30 落地自救 MLG：新状态 `mlg`，放水→落进去→把桶收回来
+
+机主问"跌落好做吗"，做了。新增 `sidecar/mlg.js` + `guardian.js` 里第五个状态 `mlg`。
+
+**为什么能做得比较有把握**：`block_place` 对水桶是通用的（`generic_place.js` 直接发原包，不看物品类型），
+`activateBlock` 能对水方块按右键把水舀回空桶。两者都在核心，不用插件。
+
+**`mlg.js` 三个纯函数**（能脱离服务器测）
+- `fallInfo(bot)`：`velocity.y < -0.75` 且 `!onGround` 才算坠落（普通起跳落地时 vy≈-0.5，不会误判）；
+  五条射线（中心 + 碰撞箱四角 ±0.29）往下探，**取最近的那层**——只看正中会从格缝漏下去。
+  返回落点方块与「水该放的那一格」（落点顶面）。脚下已经是水就直接不救。
+- `shouldMlg()`：纯算术判该不该动手。**离地 ≤3.5 格才放**——太早水会流走，太晚来不及；约剩 0.6 秒，够发一个包。
+- `mlgRescue()`：放水 → 等落地（≤3s）→ 落进自己的水就用空桶收回来。
+
+**两个关键取舍**
+1. **放水不 await `placeBlock` 的完成确认**（它要等 5 秒的 blockUpdate），只 await `lookAt` 与发包，再轮询 800ms 看那格变没变。
+2. **放和收必须在同一段做完**：桶是一次性消耗品，放完不收，第二次摔就没得救。
+
+**上报**：新增 `reflex_mlg` 事件 → `/event`，`mind._event_text` 有对应中文（含"离地 N 格""桶也收回来了/桶留在地上了"）。
+`/state` 的 `reflex` 值可为 `mlg`，`l1.state_text` 与 `prompts.world_block` 都加了标签「正在落地自救」。
+没有水桶但有危险时只 log 一次（15s 去重），不刷屏。
+
+**验证**：`node yuki-bot/scripts/mlg-test.js` 18/18 —— shouldMlg 七条判据、正常下落算距离、
+**站在格缝上取四周最近那层而不是正中那个洞**、脚下是水不触发、站在地上/普通起跳不误判、没落点时直接放弃、状态机能进 mlg。
+回归：`reflex-test.js` 29/29、`skills-test.js` 45/45、`test_domains.py` 44/44。
+
+**没验的**：真实坠落下的落地判定与收桶（要起服，从高处跳一次）。时序参数（3.5 格触发、800ms 等水、3s 等落地）是按物理估算的，
+真机可能要微调——`MLG_TRIGGER_DISTANCE` 在 `guardian.js` 顶部，`placeWater` 的 800ms 在 `mlg.js`。

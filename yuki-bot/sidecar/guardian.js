@@ -19,6 +19,7 @@
 //   其余 → 打
 const log = require('./log')
 const { sleep } = require('./util')
+const { fallInfo, shouldMlg, mlgRescue, WATER_BUCKET } = require('./mlg')
 
 const TICK_MS = 250
 const COOLDOWN_MS = 5000
@@ -33,7 +34,11 @@ const FIGHT_TIMEOUT_MS = 45000
 const EPISODE_HOLD_MS = 6000
 const NEVER_MELEE = new Set(['creeper'])
 
-const STATE = { IDLE: 'idle', DEFEND: 'defend', FLEE: 'flee', RECOVER: 'recover' }
+const STATE = { IDLE: 'idle', DEFEND: 'defend', FLEE: 'flee', RECOVER: 'recover', MLG: 'mlg' }
+
+// 摔下来的时候先看这个，比什么都急
+const MLG_TRIGGER_DISTANCE = 3.5
+const NO_BUCKET_WARN_MS = 15000
 
 class Guardian {
   constructor ({ link, runner, emit, eat }) {
@@ -122,7 +127,7 @@ class Guardian {
     if (this.episodes[next] !== undefined) this.episodes[next] += 1
 
     // 只有「跑」值得当场叫醒她；开打和收工用知会档，别每次打架都打断她说话
-    const severity = next === STATE.FLEE ? 8 : next === STATE.DEFEND ? 5 : 3
+    const severity = (next === STATE.FLEE || next === STATE.MLG) ? 8 : next === STATE.DEFEND ? 5 : 3
     log.info('reflex_transition', { from, to: next, reason, detail })
     this.emit({ type: 'reflex', from, to: next, reason, detail, severity, kills: this.kills })
     return true
@@ -135,6 +140,24 @@ class Guardian {
 
     const bot = link.bot
     const now = Date.now()
+
+    // ---- 坠落：比岩浆还急，先算这一帧掉多快 ----
+    if (this.state !== STATE.MLG && !this.busy) {
+      const fall = fallInfo(bot)
+      const hasBucket = countOf(bot, WATER_BUCKET) > 0
+      const call = shouldMlg({ falling: fall.falling, dist: fall.dist, hasBucket, triggerDistance: MLG_TRIGGER_DISTANCE })
+      if (call.fire) {
+        return this._episode(STATE.MLG, 'falling', {
+          dist: Math.round(fall.dist * 100) / 100, vy: Math.round(fall.vy * 100) / 100
+        }, () => this.mlg(fall))
+      }
+      // 会摔死但没有水桶：说一次就够，别每 250ms 喊一遍
+      if (fall.falling && fall.dist !== null && fall.dist <= MLG_TRIGGER_DISTANCE && !hasBucket &&
+          now - (this.lastNoBucketAt || 0) > NO_BUCKET_WARN_MS) {
+        this.lastNoBucketAt = now
+        log.warn('reflex_fall_no_bucket', { dist: Math.round(fall.dist), vy: Math.round(fall.vy) })
+      }
+    }
 
     // ---- 致命：无论什么状态都要先处理 ----
     const blocks = link.blocksAroundFeet()
@@ -337,6 +360,18 @@ class Guardian {
     return true
   }
 
+  // ================= 摔 =================
+  /** 落地自救：放水 → 落进去 → 把桶收回来。 */
+  async mlg (fall) {
+    const bot = this.link.bot
+    if (!bot) return
+    this.link.hardStop() // 先松开键盘，别在坠落时还按着前进
+    const result = await mlgRescue(bot, fall)
+    log.info('reflex_mlg', result.detail)
+    this.emit({ type: 'reflex_mlg', ...result.detail, severity: result.ok ? 4 : 7 })
+    this.link.hardStop()
+  }
+
   // ================= 跑 / 吃 =================
   /** 岩浆/虚空：找最近的落脚点跑过去；找不到就原地跳（岩浆里跳能上浮）。 */
   async escape () {
@@ -409,6 +444,11 @@ function chooseReaction ({ threats, health, hasWeapon }) {
   return { action: 'defend' }
 }
 
+function countOf (bot, name) {
+  if (!bot || !bot.inventory) return 0
+  return bot.inventory.items().filter((it) => it.name === name).reduce((sum, it) => sum + it.count, 0)
+}
+
 function isHostile (entity, mcData, self) {
   if (!entity || entity === self || !entity.position) return false
   const def = mcData.entitiesByName[entity.name]
@@ -454,4 +494,4 @@ function findSafeSpot (bot, from, radius) {
   return null
 }
 
-module.exports = { Guardian, STATE, chooseReaction, findSafeSpot, nearestHostile, hostilesNear, isHostile }
+module.exports = { Guardian, STATE, chooseReaction, findSafeSpot, nearestHostile, hostilesNear, isHostile, MLG_TRIGGER_DISTANCE }
