@@ -390,3 +390,24 @@ SSE `experience_candidate`。候选**只进内存**，账本留给 P4.3 打分�
 
 **下一步 P4.3**：给这批候选打分（novelty / surprise / interest / social / progress / 重复惩罚 / 打断代价 / confidence），
 记录阈值与唤醒阈值分开；打分后的才写 `experiences.jsonl`。P4.0 观战截图跟随仍等机主肉眼验。
+
+## 2026-10-30 P4.3 方案定型（Memory-Guided Adaptive Attention，代码未动）
+
+机主否掉了「P4.3 = 固定权重打分器 + 固定阈值」的路线，重新定为**基于记忆与短期经历的自适应注意力**。
+只讨论、只写文档，代码保持 P4.2 状态（`observer.js` / `experiences.js` 一行未改）。
+
+**讨论中确认的现有代码问题（下一步要改的）**
+1. `planner/mind.py::_flush_events` 先把 due 从 `_event_buffer` 摘掉再判忙，忙时直接 `return`
+   ⇒ 任务期间到达的候选被静默丢弃，是 Miss Rate 的主要来源（决策 #49）。
+2. `sidecar/observer.js` 的 `seen` 只存 `key → last_at`，且 key 是类级 `entity:sheep`
+   ⇒ 见过任何一只羊之后所有羊的 `novelty` 恒为 0，再叠加 3 分钟冷却，第 101 只羊永远不产生候选（决策 #42/#46）。
+3. `sidecar/experiences.js::ExperienceStore` 内存持有 `items`，`_rewrite()` 只写自己那份列表
+   ⇒ 别的进程往同一 JSONL 追加的行会被整行吃掉；因此 decision 走独立 `decisions.jsonl`（决策 #44）。
+4. `planner/memory.py::recall()` 返回的是注入用的格式化条目（含中文 `debug`），
+   注意力模块需要的是数值证据 ⇒ 另开 `recall_scored()`；`_VectorIndex.query()` 也只支持单条编码，多候选要批量。
+
+**第一轮范围（Shadow）**：sidecar 只写事实行（`salience: null`）→ planner 算分并写 decision →
+不真唤醒、不真截图；Snapshot 只写 decision（P4.0 截图跟随还没肉眼验）。
+
+**没做的**：Voyager / Automatic Curriculum 不进 P4.3（决策 #48）；兴趣模型第一轮只读不写，
+先观察「本该记什么证据」，避免自我强化。

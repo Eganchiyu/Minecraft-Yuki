@@ -129,7 +129,7 @@ free -g | head -2
 
 ## 2. 当前状态（2026-10-30 收工，P4.2 后）
 
-**一句话**：P0–P3 全通，**P4.1 经历账本 + P4.2 世界观察/事件聚合已落地**；世界当前**全停**（25565/25566/8790/8791 空）。下一步是 **P4.3 Salience Scorer + Attention Scheduler**（给候选打分、决定记录/唤醒/申请截图）。P4.0 观战截图跟随仍等机主肉眼确认，不阻塞。
+**一句话**：P0–P3 全通，**P4.1 经历账本 + P4.2 世界观察/事件聚合已落地**；世界当前**全停**（25565/25566/8790/8791 空）。下一步是 **P4.3 Memory-Guided Adaptive Attention**（记忆辅助的自适应注意力：连续新颖度 + 兴趣后验 + 候选排序）。**规格已定、代码未动**，见 4.6。P4.0 观战截图跟随仍等机主肉眼确认，不阻塞。
 
 **已完成（按时间）**
 
@@ -164,7 +164,7 @@ free -g | head -2
 1. [ ] **P4.0 截图链路人工验证**：起服 + sidecar + spectator 客户端，让 Yuki 移动/转头，确认 `ffmpeg x11grab` 抓到的画面是否跟随；结论写回 PRD/HANDOFF。不同步则截图限定人工触发，不阻塞 P4
 2. [x] **P4.1 经历数据结构与落盘**：`Experience` / `ExperienceCapsule`、去重键、世界分区、过期与截断；纯函数单测（序列化/去重/重启恢复）
 3. [x] **P4.2 World Observer + Event Grouper**：先做 `new_entity`（初遇实体）、`block_change_cluster`（短静默窗口 + 空间相邻的人工方块变化）、`landmark_arrival`、`task_milestone`；不做建筑语义断言
-4. [ ] **P4.3 Salience Scorer + Attention Scheduler**（下一步）：配置化权重（novelty / surprise / interest / social / progress / repeat penalty / interruption cost / confidence）；记录阈值、唤醒阈值、截图阈值三者分开；任务或反射期间只记录。入参就是 `/candidates` 里那批事实（`novelty`/`confidence`/`detail.block_count` 等），打分后写 `experiences.jsonl`
+4. [ ] **P4.3 Memory-Guided Adaptive Attention**（下一步，规格见 4.6，**第一轮只做 Shadow**）：不再问「够不够分数线」，而是「结合她的记忆、兴趣和此刻状态，这事值不值得注意」。连续新颖度（短期情景 + 长期熟悉，见过≠不感兴趣）+ 记忆召回证据 + 兴趣后验 + 窗口内排序；Record / Wake / Snapshot 三档仍然分开，但 Wake 是「下限 + top-k」而不是单阈值。不真唤醒、不真截图，只写 decision
 5. [ ] **P4.4 Capsule → L1**：压成一两句人话 + 有限选项（含 ignore/no_action），复用现有事件唤醒路径；行动仍走 intention → L2 → L3；经历写入记忆
 6. [ ] **P5（后续）**：Snapshot Scheduler（开关/间隔/配额/稳定窗口）、Vision Adapter、主动观察、爱心端到端验收
 7. [ ] **P6（后续）**：按真实使用反馈决定兴趣权重、心愿、mood、锚点；回归与长跑
@@ -220,6 +220,15 @@ free -g | head -2
 | 38 | P4.2 候选**只带事实**（`novelty` / `confidence` / `detail.block_count`），`salience` 恒为 `null`，且**不写经历账本**；打分与落盘整体归 P4.3 | 观察者一旦自己打分，权重就散在两处；分数与写入应该一起改一起调 |
 | 39 | 同一处继续搭：`(kind, subject)` 5 分钟内**合并**成同一条候选（块数累加），3 分钟冷却用于「同一种羊/同一个地方」的重复抑制 | 搭爱心有停顿，静默窗口会切出好几批；不合并就会反复叫醒她，而合并后候选能反映整颗爱心 |
 | 40 | 「世界变了」不许包含**她自己的动作**：`place.js` 放成功后调 `observer.markSelfPlacement(pos)`，1 格内 2.5 秒的变化不算候选 | 她放工作台/熔炉本来就是任务的一部分，不该被自己当成风景 |
+| 41 | **P4.3 重定义为 Memory-Guided Adaptive Attention**，不是「Salience Scorer + 阈值」。判断的问题从「够不够分」改成「结合记忆、兴趣、当前状态值不值得注意」 | 固定规则 + 固定权重 + 固定阈值会把好奇心做成过于谨慎的告警系统 |
+| 42 | **见过 ≠ 不感兴趣**：`seen` 只负责机械重复抑制；新颖度连续化（短期情景 + 长期熟悉两段时间尺度），熟悉但仍有吸引力的东西要能再次被注意到 | 第 101 只羊仍然可能值得她停下来看一眼 |
+| 43 | **切点放在 Record**：sidecar 只产事实并立刻写事实行（`salience: null`），记忆召回/兴趣/注意力决策全在 planner；planner 追加 decision 行 | 打分跨进程会让落盘依赖 planner 在线；事实先落地，planner 挂了也不丢候选，Shadow 免费成立 |
+| 44 | decision 写**独立 `decisions.jsonl`**（按 `candidate_id` 关联），不往 `experiences.jsonl` 里追加 | `ExperienceStore` 在内存里维护 `items`，`_rewrite()` 只写自己那份列表，别的进程追加的行会被整行吃掉；`parseJsonl` 还会把 decision 行误当经历 |
+| 45 | **第一轮只做 Shadow**：落账本 + 算分 + 写 decision，不真唤醒、不真截图；Wake/Snapshot 只记「本应执行」 | 没有真实分布就开闸，调参只能靠感觉；先把证据攒出来 |
+| 46 | 新颖度**不新建第三套库**：短期用账本近窗（无向量），长期用 `seen` 的 `{count, last_at, last_subject}` + 记忆 kNN；语义近邻才走 embedding | 双时间尺度都是为了「熟悉但不同」，一份账本能同时供两个尺度用，别再造一份状态 |
+| 47 | 兴趣模型用 **Beta-Binomial 后验下界**（mean−1σ）而不是后验均值；只有她的主动行为算证据（靠近/继续观察/表达喜欢=正，明确拒绝=负），无反应与被玩家叫走**不更新**；保留一小份随机探索额度 | 均值会让样本少的新类别被老类别永久压住；而「忽略」多半是她正忙，不是不喜欢 |
+| 48 | Voyager 的 Automatic Curriculum（心愿推荐）**不进 P4.3**，单独排期 | 注意力是「筛已有事件」，课程是「生成新目标」，验收标准正交，混做会让 P4.3 收不了口 |
+| 49 | `_flush_events` 的「忙时丢事件」要在 P4.3 前修：due 项改为保留 + TTL，超时降级为 record | 现在先把 due 从缓冲里摘掉再判忙，任务期间到达的候选被静默丢弃，是 Miss Rate 的主要来源 |
 
 ---
 
@@ -247,6 +256,55 @@ planner/state/worlds/<world>/          # 一个世界一个目录，world 来自
   内存紧张就设 `memory.vector=false`，退化为纯关键词召回，召回质量下降但零依赖。
 - **验收**：`planner/tests/test_memory.py` 43 项（含真向量索引、重启接话、世界隔离）；
   线上看 `GET /stats` 的 `world` / `memory` / `memory_vector` / `recall`，`GET /health` 带 `world`。
+
+---
+
+## 4.6 P4.3 规格：Memory-Guided Adaptive Attention（Shadow 第一轮，未落地）
+
+**判断式**：不再问「这条候选够不够分数线」，而是问「结合她过去的经历、当前的兴趣和此刻的状态，这件事值不值得让她注意」。
+
+### 数据流（切点在 Record）
+
+```
+observer 候选（事实不变）
+   │
+   ├─ sidecar 立即 append 事实行 → experiences.jsonl    salience=null, visual='none'
+   │                                              （planner 离线也不丢）
+   └─ planner/attention（新模块）
+        读未决事实行 → 拼 query → recall_scored 批量召回证据
+        → novelty(短/长) + interest 后验下界 + importance + 打断代价
+        → A(c) → 追加 decision 行 → decisions.jsonl
+```
+
+- **事实行**：沿用 P4.1 `makeExperience` 字段（`id/kind/subject/summary/detail/at`），`salience` 留 `null`，另加 `features`（`seen.count` / `seen.last_at` / `block_count` / `distance` / `biome`）。
+- **decision 行**：`{"candidate_id", "at", "scores": {novelty, short, long, interest, importance, visual_need}, "memory_matches": [id...], "decision": "record|wake|snapshot", "shadow": true, "reason": "..."}`。
+- 两文件都在 `planner/state/worlds/<world>/` 下并排；读侧按 `candidate_id` join，**不改写历史行**。
+
+### 三个指标不要合成一个
+
+- `A(c)` = 注意力价值（值不值得注意）
+- `V(c)` = 视觉信息价值（截图能不能补上当前缺失的信息）；第一轮只由「是否存在未决视觉问题」决定（如 `pattern=unknown`），不虚构不确定性
+- 决策：`record` 全收（Observer 已去重即记）；`wake` = `A(c) ≥ floor` **且** 窗口内 top-k（k 由 `AUTONOMY` 的 tick 频率天然约束）；`snapshot` = `A(c) ≥ floor` 且 `V(c)` 高，**且 P4.0 截图跟随验过之后才真发**
+
+### 需要新增的最小接口
+
+| 位置 | 接口 | 说明 |
+|---|---|---|
+| `sidecar/observer.js` | `seen` 改 `key → {count, last_at, last_subject}` | 现在只存 `last_at` 且 key 是类级 `entity:sheep`，见过任何一只羊后所有羊的 novelty 恒为 0 |
+| `sidecar/experiences.js` | `appendFact()` / 读未决事实 | 现有 `add()` 已够，补一条「按 id 更新?」→ **不要**，decision 走另一个文件 |
+| `planner/memory.py` | `recall_scored(query, n)` | 返回 `{id, kind, ts, relevance, keyword_hit, score}` 的**数值证据**，不做注入格式化（现有 `recall()` 不动） |
+| `planner/memory.py` | `_VectorIndex.encode_batch()` | 现在 `query()` 一次只编一条；一批候选要批量编码 |
+| `planner/attention.py` | 新文件 | 打分 + 排序 + 写 decision；纯函数部分单独可单测 |
+
+### 反馈回路（第一轮只读不写）
+
+兴趣证据只能来自她的**主动行为**：`dispatch` 了与候选对象相关的 intention、`chain` 的终态、主动说「喜欢/不想」。无反应、被玩家叫走、任务抢占 → **不更新**。第一轮**不训练、不回写兴趣模型**，只把「本该记什么证据」写进 decision 的 `reason`，等分布稳定再打开回写。
+
+### 遗留风险（写进日志就能看见）
+
+1. **自我强化**：只有被唤醒的候选才有反馈，兴趣模型会收敛到「唤醒过的=喜欢」。对策：保留探索额度，或把「没唤醒但后来她自己靠近该对象」也算正证据（更干净）。
+2. **Miss Rate 现在不可测**：需要一份极小标注集（约 50 条候选标「会关注/不会」），否则四项指标里只有三项能算。
+3. **Snapshot 依赖 P4.0**：截图跟随未肉眼确认前，Snapshot 只写 decision。
 
 ---
 
