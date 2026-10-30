@@ -291,3 +291,11 @@ severity：flee=8（会叫醒）、defend=5、recover/idle=3（知会档，不�
 
 **种植/收割、繁殖**：能做但没做。繁殖简单（拿小麦/胡萝卜 `activateEntity` 两只）；种植是组合型（锄地→播种→等成熟→收→补种），
 且"等成熟"是长循环，不符合"一个技能一个动作"，得当成 task 而不是 skill。放在反射稳定之后再说。
+
+## 2026-10-30 Yuki 换肤（客户端方案 A）
+
+- 结论：bot 走 `auth:'offline'`、服务端 `online-mode=false`，没有 Mojang 签发的 textures 属性，换肤只能在**看的人客户端**做。
+- 装 `CustomSkinLoader_Universal-15.1.jar`（Modrinth，元数据含 26.1.2 fabric）到 `.minecraft/versions/26.1.2-Fabric/mods/`。这个 jar 是 bootstrap，首次启动会把内置的 `CustomSkinLoader-Common.jar` remap 后注入，不需要额外下载。
+- 皮肤文件放 `CustomSkinLoader/LocalSkin/skins/Yuki-chan.png`（**不是 `Yuki`**，`configs/local.json` 里 mc.username 是 `Yuki-chan`）。CSL 的 `LocalSkin` 是内置默认 profile（priority 710），默认 loadlist 就带，不用手写 `CustomSkinLoader.json`。
+- 皮肤校验：64×64、RGBA，臂区 14px + 右侧 2px 透明 padding，是 **slim/Alex** 模型；CSL 自动判定模型能对上。
+- 待验：启动客户端看 Yuki 是否变成该皮肤（本地皮肤只对自己可见，其他玩家仍看到默认皮肤）。
