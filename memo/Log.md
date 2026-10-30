@@ -448,3 +448,36 @@ decision 与经历账本分开（决策 #44/#52）；planner 不在线也不丢�
 
 **当前状态**：P4.3 Shadow 完成，P4.4（Capsule → L1）未开始。P4.0 截图跟随仍等机主肉眼验。
 未做：兴趣回写/探索额度、Miss Rate 标注集、Snapshot 真发、噪声地形下的阈值调参。
+
+## 2026-10-31 P4.4 Capsule → L1 + P5 代码骨架 + P4.0 虚拟屏验证
+
+**P4.0 截图链路（虚拟屏，不碰机主桌面）**
+- 结论：mineflayer 无渲染器；prismarine-viewer 上限 1.21.4；唯一可行是真客户端。方案定为
+  `Xvfb :98` + `26.1.2-Fabric` 客户端（第二离线账号 `YukiCam`，spectator）+ Mesa 软件渲染。
+- 跟随不用 `/spectate`（要客户端敲命令）：服务端控制台每 200ms `/tp` 到她的坐标 + yaw/pitch，
+  相机沿视角前移 0.6 格避免陷进她的模型；`XTest`（ctypes 调 libXtst）敲 F1 隐藏 HUD。
+- 真机三帧验证：静止/走动/抬头画面都有变化（`/tmp/p4-0`，跑完已清），PASS。限制：贴墙时相机可能陷进方块。
+- 新脚本：`scripts/mc-client-headless.sh`、`mc-shot.sh`、`mc-keys.py`、`p4-0-run.sh`、
+  `yuki-bot/scripts/mc-camera-follow.js`；侧车 `/state` 增 `view{yaw,pitch}`。
+
+**P4.4 Capsule → L1（代码 + 单测完成，真机验收待跑）**
+- `planner/capsule.py`（新）：事实行 → 一两句人话 + 封闭选项（express/observe/approach/remember/ignore），
+  不写语义断言；`CapsuleLog` 按 candidate_id 追加「反应 → 结果」。
+- `planner/mind.py`：注意力 wake 现在真叫醒 L1（低优先级 2）；忙/睡/闸门没开就 `attention.downgrade()`
+  补一条 record；反应写回侧车账本、压成人话进记忆；任务结果补回同一条经历。
+- 闸门记账修正：任务回调那一轮 `mark_wake=False`——它是对自己动作的续接，不该吃掉 120 秒打扰闸门，
+  否则任务里程碑的 wake 永远被自己挡掉。新增 `autonomy.idle_first_gap_s`（默认 0）压住启动即 idle。
+- 首次真机跑失败（已被上面两条修复）：她启动去砍木头（沙漠无树）跑成 busy，候选打断代价全 0.35；
+  里程碑 wake 被回调轮吃闸门降级。**修复后尚未重跑真机验收。**
+- 单测：`test_capsule.py` 55 项（含降级、截图闸门、视觉解析、唤醒接线）。
+
+**P5 代码骨架（截图默认关）**
+- `planner/snapshot.py`：开关/最小间隔/每小时配额/同一事件一张/稳定窗口/忙睡延迟/画面可用性检查
+  （黑屏、单一大色块直接判废）；抓帧走 `ffmpeg x11grab` 抓 `:98`，子进程异步。
+- `planner/vision.py`：截图 → base64 → 现有 OpenAI 兼容端点（deepseek-flash）→ `{summary,tags,confidence}`；
+  失败保留无图经历，视觉摘要只进这次经历、不进长期对话上下文。
+- 侧车 `POST /look`（只转视角不派活）；`snapshot.look_before` 默认开（P4.0 已验相机跟随 yaw/pitch）。
+- 未做：P5.4 爱心端到端、真实截图 → 视觉 → 落账的真机核对。
+
+**当前状态**：P4.0 通过；P4.4/P5 代码与单测全绿，但**两端真机验收未过**；改动已提交。
+下一步：重跑 `bash scripts/p4-4-run.sh`，再做 P5.4；文档 PRD/HANDOFF 待验收后同步。

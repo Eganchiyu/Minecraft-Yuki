@@ -75,6 +75,8 @@ AUTONOMY = {
     "enabled": bool(_AUTONOMY.get("enabled", True)),
     "tick_s": _float(_AUTONOMY.get("tick_s"), 2.0),                  # 循环心跳，不是每拍都调模型
     "idle_gap_s": _float(_AUTONOMY.get("idle_gap_s"), 45.0),        # 闲着时多久自己想一想
+    # 进程刚起来时先安静这么久再自主行动（专注验收/省 token 用；0 = 老行为）
+    "idle_first_gap_s": _float(_AUTONOMY.get("idle_first_gap_s"), 0.0),
     "max_idle_gap_s": _float(_AUTONOMY.get("max_idle_gap_s"), 120.0),
     "max_calls_per_10min": _int(_AUTONOMY.get("max_calls_per_10min"), 80),
     "max_tokens": _int(_AUTONOMY.get("max_tokens"), 260),
@@ -91,10 +93,14 @@ AUTONOMY = {
     # 身体明明闲着却一直以为自己在干活，超过这么多秒就复位
     "stuck_after_s": _float(_AUTONOMY.get("stuck_after_s"), 20.0),
 }
-# P4.3 注意力（Shadow 第一轮）：只打分、只写 decision，不真唤醒、不真截图
+# P4.3 注意力 + P4.4 capsule → L1：wake 真的会叫醒她（wake_enabled=false 退回 Shadow）
 _ATT = _RAW.get("attention") or {}
 ATTENTION = {
     "enabled": bool(_ATT.get("enabled", True)),
+    # P4.4：decision=wake 是否真的叫醒 L1。关掉就是 P4.3 的 Shadow 行为
+    "wake_enabled": bool(_ATT.get("wake_enabled", True)),
+    # 经历唤醒用低优先级：外部委托/聊天随时能接管（PRD P4.4）
+    "capsule_priority": _int(_ATT.get("capsule_priority"), 2),
     "batch_s": _float(_ATT.get("batch_s"), 60.0),                  # 打分按批，允许积压
     "floor": _float(_ATT.get("floor"), 0.55),                       # A(c) 下限
     "top_k": _int(_ATT.get("top_k"), 1),                            # 每批最多放行几条 wake
@@ -129,6 +135,44 @@ VECTOR_PATH = STATE_DIR / "chroma"
 # P4.3：侧车写事实行、planner 写 decision，两个文件并排、按 candidate_id join
 ATTENTION_FACTS_PATH = STATE_DIR / "experiences.jsonl"
 DECISIONS_PATH = STATE_DIR / "decisions.jsonl"
+# P4.4：胶囊与她的反应（speak/act/ignore），同样按 candidate_id join 回事实行
+CAPSULES_PATH = STATE_DIR / "capsules.jsonl"
+
+# P5.1 截图调度：默认关；开了也受最小间隔/配额/同一事件一张/稳定窗口约束
+_SHOT = _RAW.get("snapshot") or {}
+SNAPSHOT = {
+    "enabled": bool(_SHOT.get("enabled", False)),
+    "min_gap_s": _float(_SHOT.get("min_gap_s"), 90.0),
+    "per_hour": _int(_SHOT.get("per_hour"), 6),
+    "max_per_event": _int(_SHOT.get("max_per_event"), 1),
+    # 建造类候选要等世界安静这么久再拍，别拍半成品
+    "stable_window_s": _float(_SHOT.get("stable_window_s"), 6.0),
+    # 忙/睡时默认延迟（不是丢弃），等空了再拍
+    "defer_when_busy": bool(_SHOT.get("defer_when_busy", True)),
+    # P4.0 验过的虚拟屏：Xvfb :98 + 观战客户端，不碰机主的 :0.0
+    "display": str(_SHOT.get("display") or os.environ.get("MC_DISPLAY") or ":98"),
+    "size": str(_SHOT.get("size") or os.environ.get("MC_CAPTURE_SIZE") or "1280x720"),
+    "offset": str(_SHOT.get("offset") or "+0,0"),
+    # 缩到 960 宽再送视觉：再大只会烧 token
+    "scale_width": _int(_SHOT.get("scale_width"), 960),
+    "dir": Path(_SHOT.get("dir") or (STATE_DIR / "snapshots")),
+    "keep": _int(_SHOT.get("keep"), 60),
+    "timeout_s": _float(_SHOT.get("timeout_s"), 12.0),
+    # P5.3：拍之前让 bot 转向目标（观战相机跟着她的 yaw/pitch，P4.0 已验）
+    "look_before": bool(_SHOT.get("look_before", True)),
+    # 画面可用性检查：黑屏/单一大色块（相机陷进方块）就当没拍到
+    "sanity": bool(_SHOT.get("sanity", True)),
+    "min_brightness": _float(_SHOT.get("min_brightness"), 25.0),
+    "max_dominant_share": _float(_SHOT.get("max_dominant_share"), 0.55),
+}
+# P5.2 视觉通道：复用 llm 的 OpenAI 兼容端点（deepseek-flash 支持 image_url）
+_VIS = _RAW.get("vision") or {}
+VISION = {
+    "enabled": bool(_VIS.get("enabled", True)),
+    "model": str(_VIS.get("model") or _LLM.get("vision_model") or _LLM.get("model", "deepseek-flash")),
+    "max_tokens": _int(_VIS.get("max_tokens"), 200),
+    "timeout_s": _float(_VIS.get("timeout_s"), 60.0),
+}
 # 世界知识表：哪个箱子有什么、在哪（由 L3 每次开容器上报，按坐标覆盖）
 # 目前先关掉：places_enabled=false 时不记录也不注入，代码留着随时开
 _NOTES = _RAW.get("notes") or {}

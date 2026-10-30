@@ -17,8 +17,11 @@ import time
 from pathlib import Path
 
 import attention
+import capsule
 import config
 import prompts
+import snapshot
+import vision
 from budget import BudgetExceeded
 from facts import extract_facts, facts_text, options_to_text
 from history import HistoryStore
@@ -102,6 +105,11 @@ class Mind:
         self.attention = attention.AttentionEngine(
             self.memory, config.ATTENTION_FACTS_PATH, config.DECISIONS_PATH, config.ATTENTION
         )
+        # P4.4：capsule 流水（她注意到了什么、怎么反应）；截图/视觉在 P5 挂上来
+        self.capsules = capsule.CapsuleLog(config.CAPSULES_PATH)
+        self.snapshots = snapshot.SnapshotScheduler(config.SNAPSHOT, self.sidecar, now=time.time)
+        self.vision = vision.VisionAdapter(self.llm, config.VISION)
+        self._experience_intents: dict[str, str] = {}
         self.notes = NoteStore(config.NOTES_PATH)
         self.history_store = HistoryStore(config.HISTORY_PATH, config.MEMORY["history_max"])
         self.history: list[dict] = self.history_store.load()
@@ -113,7 +121,10 @@ class Mind:
         self.last_state: dict = {}
         self.last_budget: dict = {}
         self.state: dict = self._load_state()
-        self.metrics = {"turns": 0, "intentions": 0, "chats": 0, "ticks": 0, "say": 0}
+        self.metrics = {
+            "turns": 0, "intentions": 0, "chats": 0, "ticks": 0, "say": 0,
+            "experience": 0, "experience_ignore": 0, "snapshots": 0,
+        }
         self._lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         self._call_times: list[float] = []
@@ -198,9 +209,10 @@ class Mind:
             event = self._result_event(status, summary, text, chain.notes if chain else "")
             origin = (chain.origin if chain else "self_play") or "self_play"
             priority = int(current.get("priority") or 5)
-            result = await self._turn(event, origin=origin, priority=priority, kind="after_task")
+            result = await self._turn(event, origin=origin, priority=priority, kind="after_task", mark_wake=False)
             self._log_chain(chain, intention_id, status, summary)
             self._release_chain(chain)
+            await self._record_experience_outcome(intention_id, status, summary)
             return result
 
     async def dispatch_direct(self, text: str, priority: int = 5) -> dict:
@@ -248,6 +260,12 @@ class Mind:
             "places": self.notes.count(),
             "metrics": dict(self.metrics),
             "attention": self.attention.snapshot(),
+            "snapshot": self.snapshots.snapshot(),
+            "vision": self.vision.snapshot(),
+            "experiences": {
+                "known": len(self.capsules.latest()),
+                "recent": self.capsules.rows()[-3:],
+            },
             "last_wake_at": self._last_wake_at,
             "chains": len(self.chains),
             "last_budget": self.last_budget,
@@ -258,9 +276,17 @@ class Mind:
         return {"plan": self.planner.metrics.snapshot(), **self.snapshot()}
 
     # ================= 一轮对话 =================
-    async def _turn(self, user_text: str, origin: str, priority: int, kind: str, allow_tools: bool = True) -> dict:
-        """一次模型调用 = 一句回话，或一个 intention，或两者都有。"""
-        self._mark_wake(time.time())
+    async def _turn(
+        self, user_text: str, origin: str, priority: int, kind: str,
+        allow_tools: bool = True, mark_wake: bool = True,
+    ) -> dict:
+        """一次模型调用 = 一句回话，或一个 intention，或两者都有。
+
+        mark_wake=False 用于「任务结果」这类对话续接：它不是新的主动打扰，
+        不该占掉 120 秒闸门——否则任务做完那一刻的里程碑经历永远被自己挡掉。
+        """
+        if mark_wake:
+            self._mark_wake(time.time())
         state, stale = await self.sidecar.state()
         if state:
             self.last_state = state
@@ -283,7 +309,7 @@ class Mind:
         ]
         self.metrics["turns"] += 1
         self._roll_daily()
-        if kind in {"idle", "event", "after_task"}:
+        if kind in {"idle", "event", "after_task", "experience"}:
             self._call_times.append(time.time())
             self._daily["self_calls"] += 1
         try:
@@ -323,7 +349,7 @@ class Mind:
             log.warning("intention_failed", text=intention_text, error=dispatch_error)
 
         # 主动说话限额：自己找事时的碎嘴别刷屏
-        if kind in {"idle", "event"} and say:
+        if kind in {"idle", "event", "experience"} and say:
             gap = int(config.AUTONOMY["proactive_say_min_gap_s"])
             if time.time() - float(self.state.get("last_say_at") or 0) < gap:
                 log.info("say_suppressed", reason="cooldown", say=say[:30])
@@ -458,6 +484,121 @@ class Mind:
             return result
         return None
 
+    # ================= P4.4 经历胶囊 → L1 =================
+    async def _consume_experience(self, decisions: list[dict], now: float) -> None:
+        """把 decision=wake 的经历真的交给她。
+
+        此刻不能打扰就补一条 record 降级（append-only，读侧取最后一行），
+        候选不会积压重放，也不会被静默丢掉。
+        """
+        if not decisions or not config.ATTENTION.get("wake_enabled", True):
+            return
+        for row in decisions:
+            if row.get("decision") not in attention.WAKE_KINDS:
+                continue
+            if self.state.get("mode") == "rest":
+                self.attention.downgrade(row, "busy:rest", now)
+                continue
+            if self.state.get("current"):
+                self.attention.downgrade(row, "busy:task", now)
+                continue
+            if self._lock.locked() or not self._wake_gate_open(now):
+                self.attention.downgrade(row, "wake_gate", now)
+                continue
+            if not self._daily_ok():
+                self.attention.downgrade(row, "daily_cap", now)
+                continue
+            if not self._rate_ok():
+                self.attention.downgrade(row, "rate_limit", now)
+                continue
+            await self._experience_turn(row, now)
+
+    async def _experience_turn(self, row: dict, now: float) -> dict | None:
+        cid = str(row.get("candidate_id") or "")
+        fact = self.attention.facts(now).get(cid)
+        if not fact:
+            self.attention.downgrade(row, "missing_fact", now)
+            return None
+
+        # P5：只有 decision 本身是 snapshot 才申请一张图；拍不到/看不清就退回无图经历
+        shot: dict = {"ok": False, "skipped": "not_snapshot"}
+        visual_text = ""
+        if row.get("decision") == "snapshot" and config.SNAPSHOT.get("enabled", False):
+            shot = await self.snapshots.take(fact, self._attention_context(), now)
+            if shot.get("ok"):
+                self.metrics["snapshots"] += 1
+                described = await self.vision.describe(shot["path"], capsule.capsule_text(fact))
+                if described.get("ok"):
+                    visual_text = described["summary"]
+                    shot["vision"] = described
+
+        cap = capsule.build_capsule(fact, row, visual=visual_text)
+        priority = int(config.ATTENTION.get("capsule_priority") or 2)
+        async with self._lock:
+            if self.state.get("current") or not self._wake_gate_open(time.time()):
+                self.attention.downgrade(row, "wake_gate", time.time())
+                return None
+            self.metrics["experience"] += 1
+            result = await self._turn(
+                capsule.capsule_prompt(cap), origin="self_play", priority=priority, kind="experience"
+            )
+
+        say = str(result.get("say") or "")
+        intention = str(result.get("intention") or "")
+        action = capsule.classify_action(say, intention)
+        if action == "ignore":
+            self.metrics["experience_ignore"] += 1
+        record = {
+            **cap,
+            "say": say[:120],
+            "intention": intention[:120],
+            "action": action,
+            "intention_id": result.get("intention_id"),
+            "visual": visual_text,
+            "snapshot": {"ok": bool(shot.get("ok")), "name": shot.get("name"),
+                         "reason": shot.get("skipped") or shot.get("error")},
+            "remembered": True,
+            "at_ms": int(time.time() * 1000),
+        }
+        self.capsules.append(record)
+        # 经历写进记忆：只写压过的人话，不写坐标与内部 ID
+        self.memory.add("experience", cap["text"] + (f"（她当时说：{say}）" if say else ""))
+        try:
+            await self.sidecar.update_experience(
+                cid,
+                {
+                    "reaction": say or None,
+                    "action": action,
+                    "visual": shot.get("visual") or "none",
+                    "outcome": {"status": "acting" if result.get("intention_id") else action},
+                },
+            )
+        except Exception as exc:
+            log.warning("experience_writeback_failed", id=cid, error=str(exc))
+        if result.get("intention_id"):
+            self._experience_intents[str(result["intention_id"])] = cid
+        self._schedule_idle()
+        log.info(
+            "experience_done", kind=cap.get("kind"), action=action, say=say[:40],
+            intention=intention[:40], snapshot=bool(shot.get("ok")),
+        )
+        return record
+
+    async def _record_experience_outcome(self, intention_id: str, status: str, summary: str) -> None:
+        """由经历派生的意图收尾：把结果补回同一条经历（她注意到 → 行动 → 结果）。"""
+        cid = self._experience_intents.pop(str(intention_id or ""), "")
+        if not cid:
+            return
+        outcome = {"status": str(status or ""), "summary": str(summary or "")[:120]}
+        latest = self.capsules.latest().get(cid) or {}
+        self.capsules.append(
+            {"candidate_id": cid, "kind": latest.get("kind"), "outcome": outcome, "at_ms": int(time.time() * 1000)}
+        )
+        try:
+            await self.sidecar.update_experience(cid, {"outcome": outcome})
+        except Exception as exc:
+            log.warning("experience_outcome_failed", id=cid, error=str(exc))
+
     # ================= 时间与状态 =================
     async def _loop(self) -> None:
         while True:
@@ -485,6 +626,8 @@ class Mind:
         await self._flush_events(now)
         # 注意力按批打分：忙的时候也照常记（只写 decision，不唤醒）
         self._attention_result = await self.attention.tick(self._attention_context(state), now)
+        # P4.4：被判定 wake 的经历，此刻能打扰才真叫醒她；忙/睡/闸门没开就降级成 record
+        await self._consume_experience((self._attention_result or {}).get("decisions") or [], now)
         if self.state.get("current"):
             self._check_stuck(state, now)
             return
@@ -869,7 +1012,8 @@ class Mind:
             pass
         # 重启后身体早已空闲，旧的 current 不可信
         state["current"] = None
-        state["next_tick_at"] = 0
+        delay = float(config.AUTONOMY.get("idle_first_gap_s") or 0.0)
+        state["next_tick_at"] = time.time() + delay if delay > 0 else 0
         if state.get("mode") == "rest" and float(state.get("rest_until") or 0) < time.time():
             state["mode"] = "play"
             state["rest_until"] = 0

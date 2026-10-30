@@ -111,6 +111,26 @@ class BotLink {
     return p ? { x: round(p.x), y: round(p.y), z: round(p.z) } : null
   }
 
+  /** 视角（Notchian 角度制，给外部摄影机客户端 /tp 用）：yaw 0=南，pitch 正=低头。 */
+  view () {
+    const e = this.bot && this.bot.entity
+    if (!e) return null
+    const toDeg = 180 / Math.PI
+    const yaw = ((180 - e.yaw * toDeg) % 360 + 360) % 360
+    const pitch = -e.pitch * toDeg
+    return { yaw: Math.round(yaw * 10) / 10, pitch: Math.round(pitch * 10) / 10 }
+  }
+
+  /** P5.3 主动观察：只把视角转向某个坐标，不移动、不打断任务。 */
+  lookAt (pos) {
+    const bot = this.bot
+    if (!bot || !bot.entity || !pos) return false
+    const target = new (require('vec3').Vec3)(Number(pos.x), Number(pos.y), Number(pos.z))
+    if (![target.x, target.y, target.z].every(Number.isFinite)) return false
+    bot.lookAt(target, true)
+    return true
+  }
+
   /** 技能执行期的即时状态，由任务执行器写入。 */
   snapshot (runtime) {
     const bot = this.bot
@@ -122,6 +142,7 @@ class BotLink {
       note: runtime.note,
       reply: runtime.reply,
       pos: this.pos(),
+      view: this.view(),
       time_of_day: bot && bot.time ? bot.time.timeOfDay : null,
       day: bot && bot.time ? bot.time.day : null,
       health: bot ? bot.health : null,

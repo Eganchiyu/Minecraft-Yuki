@@ -6,8 +6,8 @@
 #   wake     值得打扰：A(c) ≥ floor 且本批 top-k 且过了全局 120 秒闸门
 #   snapshot 需要看一眼才知道：V(c) 高 + 有视觉问题（P4.0 没验之前恒不选）
 #
-# 第一轮是 Shadow：只写 decisions.jsonl，不真唤醒、不真截图（决策 #41/#50）。
-# 兴趣模型只读不写：feedback 证据先在 reason 里留话，等分布稳定再打开回写。
+# P4.3 先以 Shadow 验过一轮；P4.4 起 decision=wake 会真的叫醒 L1（config.ATTENTION.wake_enabled）。
+# Snapshot 仍要等 P4.0 截图链路验过才开。兴趣模型只读不写（决策 #55）：证据先留在 reason 里。
 import asyncio
 import json
 import logging
@@ -374,9 +374,10 @@ class AttentionEngine:
             return {"ok": False, "error": str(exc)}
 
         decisions = select_batch(scored, now, self.opts, self.last_wake_at())
+        shadow = not bool(self.opts.get("wake_enabled", True))
         for row in decisions:
             self.stats[row["decision"]] += 1
-            row["shadow"] = True
+            row["shadow"] = shadow
         self._append(decisions)
 
         self.stats["batches"] += 1
@@ -396,10 +397,31 @@ class AttentionEngine:
             "decisions": decisions,
         }
 
+    def downgrade(self, row: dict, reason: str, now: float | None = None) -> dict:
+        """本该 wake，但此刻不能打扰（在干活/在睡/闸门没开）：补一条 record 覆盖它。
+
+        decisions 是 append-only，读侧按 candidate_id 取最后一行，所以补记一行就等于降级；
+        候选不会留在 pending 里反复触发，也不会被静默吞掉。
+        """
+        now = now if now is not None else self.now()
+        patched = {
+            **row,
+            "at": int(now * 1000),
+            "decision": "record",
+            "reason": f"{reason};was={row.get('decision')};{str(row.get('reason') or '')}",
+        }
+        self.stats["record"] += 1
+        if row.get("decision") in self.stats:
+            self.stats[row["decision"]] = max(0, self.stats[row["decision"]] - 1)
+        self._append([patched])
+        log.info("attention_downgrade id=%s reason=%s", row.get("candidate_id"), reason)
+        return patched
+
     def snapshot(self) -> dict:
         return {
             "enabled": bool(self.opts.get("enabled", True)),
-            "shadow": True,
+            "wake_enabled": bool(self.opts.get("wake_enabled", True)),
+            "shadow": not bool(self.opts.get("wake_enabled", True)),
             "floor": self.opts.get("floor"),
             "top_k": self.opts.get("top_k"),
             "wake_gap_s": self.opts.get("wake_gap_s"),

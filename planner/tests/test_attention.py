@@ -47,6 +47,8 @@ OPTS = {
         "memory": 0.10, "interruption": 0.35,
     },
     "snapshot_enabled": False,
+    # P4.3 的 Shadow 行为现在由 wake_enabled=false 表达（P4.4 起默认真唤醒）
+    "wake_enabled": False,
 }
 
 
@@ -275,7 +277,7 @@ async def engine_suite():
     row = engine._read_rows(decisions_path)[-1]
     check("engine: decision 带 candidate_id/at/scores", {
         "candidate_id", "at", "scores", "memory_matches", "decision", "shadow", "reason"} <= set(row))
-    check("engine: Shadow 恒为 true", row["shadow"] is True)
+    check("engine: wake_enabled=false 时 shadow 为 true", row["shadow"] is True)
     check("engine: 记下记忆证据 id", row["memory_matches"] == ["m-sheep"], row["memory_matches"])
     check("engine: 建造候选带视觉需求", row["scores"]["visual_need"] == 1.0, row["scores"])
     check("engine: 决策后不再重复打分", engine.pending(T0) == [])
@@ -320,6 +322,15 @@ async def engine_suite():
     snap = engine.snapshot()
     check("snapshot: 暴露 shadow/floor/统计", snap["shadow"] is True and snap["floor"] == 0.55
           and snap["stats"]["scored"] >= 1, snap)
+
+    # P4.4：打开真唤醒后 shadow 变 false（同一批事实、新文件）
+    live_facts = tmp_root / "facts-live.jsonl"
+    live_facts.write_text(json.dumps(fact(fid="lv", detail={"entity_name": "sheep"})) + "\n", encoding="utf-8")
+    live_engine = attention.AttentionEngine(fake_memory, live_facts, tmp_root / "d-live.jsonl",
+                                            dict(OPTS, batch_s=0.0, wake_enabled=True), now=lambda: T0)
+    await live_engine.tick({}, T0)
+    live_row = live_engine._read_rows(tmp_root / "d-live.jsonl")[-1]
+    check("engine: 打开唤醒后 shadow=false", live_row["shadow"] is False, live_row)
 
 
 asyncio.run(engine_suite())

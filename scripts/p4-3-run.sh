@@ -55,7 +55,10 @@ import json, sys
 src = "/home/asumi/Minecraft/configs/local.json"
 raw = json.load(open(src, encoding="utf-8"))
 raw.setdefault("memory", {})["vector"] = False
-raw.setdefault("attention", {}).update({"batch_s": 5, "max_fact_age_s": 86400})
+raw.setdefault("attention", {}).update({
+    "batch_s": 5, "max_fact_age_s": 86400,
+    "wake_enabled": False,         # 这一轮验的是 P4.3 Shadow：只写 decision，不叫醒 L1
+})
 raw.setdefault("autonomy", {}).update({
     "max_calls_per_10min": 0,      # 只跑注意力，不让 idle tick 调模型
     "idle_gap_s": 3600,

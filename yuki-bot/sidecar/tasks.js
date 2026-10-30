@@ -116,7 +116,7 @@ class TaskRunner {
     this.reply = 'no_reply'
     this._abort = new AbortController()
     log.info('task_start', { intention_id: intention.intention_id, priority: intention.priority, steps: intention.steps.length })
-    this.emit({ type: 'task_start', intention_id: intention.intention_id, steps: intention.steps })
+    this.emit({ type: 'task_start', intention_id: intention.intention_id, priority: intention.priority, steps: intention.steps })
 
     const running = this.current
     const signal = this._abort.signal

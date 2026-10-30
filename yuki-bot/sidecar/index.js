@@ -159,6 +159,22 @@ const server = http.createServer(async (req, res) => {
       const n = Math.max(1, Math.min(100, parseInt(url.searchParams.get('n') || '20', 10) || 20))
       return sendJson(res, 200, { world: config.world, total: experiences.recent(1e9).length, items: experiences.recent(n) })
     }
+    // P4.4：planner 把她对某条经历的反应写回账本（reaction/action/outcome/visual）。
+    // 只改已有事实行，不新建；找不到就 404，不静默造假数据。
+    if (req.method === 'POST' && url.pathname === '/experiences/reaction') {
+      const body = await readJson(req)
+      const id = String(body.id || '').trim()
+      if (!id) return sendJson(res, 400, { error: 'id_required' })
+      const patch = {}
+      if (body.reaction !== undefined) patch.reaction = body.reaction
+      if (body.action !== undefined) patch.action = body.action
+      if (body.outcome !== undefined) patch.outcome = body.outcome
+      if (body.visual !== undefined) patch.visual = body.visual
+      const item = experiences.update(id, patch)
+      if (!item) return sendJson(res, 404, { error: 'not_found', id })
+      emit({ type: 'experience_reaction', id, action: patch.action || null })
+      return sendJson(res, 200, { ok: true, item })
+    }
     if (req.method === 'GET' && url.pathname === '/events') {
       return openSse(req, res)
     }
@@ -172,6 +188,12 @@ const server = http.createServer(async (req, res) => {
       const result = runner.cancel(body.intention_id, body.reason || 'player_cancel')
       emit({ type: 'cancel', intention_id: body.intention_id, result })
       return sendJson(res, 200, result)
+    }
+    // P5.3：主动观察的「转个身」。只转视角，不派活，不动任务队列。
+    if (req.method === 'POST' && url.pathname === '/look') {
+      const body = await readJson(req)
+      const ok = link.lookAt(body)
+      return sendJson(res, ok ? 200 : 503, { ok })
     }
     if (req.method === 'POST' && url.pathname === '/say') {
       const body = await readJson(req)

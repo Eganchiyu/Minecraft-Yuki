@@ -63,6 +63,14 @@ class SidecarClient:
     async def cancel(self, intention_id: str) -> dict:
         return await self.post("/cancel", {"intention_id": intention_id, "reason": "l1_cancel"})
 
+    async def update_experience(self, exp_id: str, patch: dict) -> dict:
+        """P4.4：把 L1 的反应写回经历账本（reaction/action/outcome/visual）。"""
+        return await self.post("/experiences/reaction", {"id": exp_id, **patch})
+
+    async def look(self, position: dict) -> dict:
+        """P5.3：让身体转向某个坐标（截不到就失败，调用方自己降级）。"""
+        return await self.post("/look", position)
+
 
 class Plan(list):
     """L2 的产出：steps（就是 list 本身，老代码照旧用）+ notes（给 L1 的一句提醒）。

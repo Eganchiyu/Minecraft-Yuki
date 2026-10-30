@@ -44,3 +44,5 @@ planner/tests/__pycache__/
 # ===== 其他 =====
 
 repository.txt
+# 虚拟屏观战客户端的运行目录（Xvfb + 客户端 options/logs，可重建）
+work/mc-camera/
