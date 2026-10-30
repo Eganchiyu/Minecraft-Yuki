@@ -162,3 +162,28 @@
 - 验收：新增 `planner/tests/test_memory.py` 43 项全过（含真向量索引建库/自愈、世界隔离、重启接话、回忆注入不污染历史）；`test_p2.py` 30 过 1 挂（「13 类非法计划拦截」，改动前后一致，是既有问题）。
 - 实测（planner 单独起，无 MC 服）：`memory_ready world=world vector=True entries=234`；问「还记得我们之前砍木头吗」→ 召回 3 条砍木头日记，她答「当然记得啦！人家砍了好多木头…」；重启后 `history=5` 接上，再问「刚才你说了什么呀」答得上。
 - 已知代价：embedding 栈让 planner RSS 约 1.0 GB、启动多 6–8 秒；内存紧就把 `memory.vector` 设 false。
+
+## 2026-10-30 调研：`/home/asumi/minecraft-numen`（言出法随）可借鉴什么
+
+只读调研，未改代码。仓库 146k 行 Java（main）+ 4.9 万行测试 + 8 个平台/插件模块，不能整体搬。
+
+**翻转的一个前提**：言出法随的身体是**服务端假玩家**（`ServerPlayer` + `FakeConnection` + 原版 `placeNewPlayer`，同 Carpet `/player`），不是"客户端注入"。
+客户端模组只是可选前端（面板/语音/皮肤）。意味着：要用它那套，**得在服务器上装 mod**；公共服进不去。且 ADR body 0003/0007 记着——他们为了补"客户端那一半"
+（代答传送握手、发 `handleXxx` 包开附魔台/切石机/铁砧/告示牌/书/交易），自己写了 6474 行 `numen-api/.../api/entity`。这部分 mineflayer 白送。
+
+**26.2 现状（查过）**：本地 minecraft-data 3.117.0 与上游 master 的 `dataPaths.pc` 都止于 `26.1`；mineflayer 4.39.0 / minecraft-protocol 1.68.0 同。
+26.2 不是配置问题，是上游没数据，只能等或自己维护协议 fork。
+
+**值得抄的（按性价比）**
+1. 三级披露文本技能（Claude Code 式，纯 Python 可照搬）：`SkillRegistry`/`SkillTool`/`SkillInjection` —— 系统提示里 `<available_skills>` 只放 name+description，
+   模型调 `skill(name)` 才注入正文 `<skill_content name="…">`，附属文件用 `file` 工具按页取。仓库里真有一份 `skills/numen/building_design/SKILL.md`（297 行）。
+   对应我们"skills 匮乏"，且不碰身体。
+2. 五条生存链 `task/chain/`（1003 行，纯逻辑，可译成 JS）：MLG 落地水（5 条射线探落点、放水、20 刻内收桶）、Breath、Flee、MobDefense、Unstuck。
+   我们 `guardian.js` 只有逃跑/后退/进食，坠落与水下一片空白。
+3. 错误枚举 `ErrorKind`（13 种：`out_of_reach`/`no_path`/`no_material`/`needs_consent`…）+ hint 写成"能照抄的下一步"。我们 `facts.py` 是自由文本，L2 不好稳定分支。
+4. 82 个 Lua 函数对照我们 12 个，缺口里**成本低且 mineflayer 原生支持**的：`gui.*` 通用窗口（`clickWindow`）、附魔/铁砧/切石机/织布机/交易（`openEnchantmentTable`/`openAnvil`/`openVillager`+`trade`）、熔炉 `smelt`（`openFurnace`）、书与告示牌（`writeBook`/`updateSign`）、`sleep`、弓与盾、`time.wait`。
+5. 统一 "where" 参数类型（Pos|Block|Entity|Cluster|column|height）替代我们每个技能各写 x/y/z —— 可改 `schema.py`。
+
+**不抄**：Lua 沙箱组合（与我们 `schema.py` 明文"表达式能力一律拒收"相冲，先不动）、自研 2.9 万字 ADR 的 pathing、`shape.*` WorldEdit（2511 行 Lua + 大量 Java）、ui/mcp/ai 模块、权限层（判"这方块是谁的"要有服务端视角，我们做不到）。
+
+**待机主定**：① 目标是"进 26.2"还是"能力更强"；② 若走 Fabric 身体，能否接受服务器必修 mod；③ 先做文本 skills / 生存链 / GUI+熔炉技能 哪一项。
