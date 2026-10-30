@@ -247,8 +247,8 @@ README 项目结构里加了指向。
 
 **写文档时挖出来的一条坑（已写进纪律 3）**：`bot.mount`/`dismount`/`attack`/`activateBlock`/`swingArm` 都是**同步返回、不返回 Promise**，只是发了个包。
 `await raceTimeout(bot.mount(e), 5000)` 会当场炸（`bot.mount(e)` 是 `undefined`）。正确写法是发完自己轮询状态。
-`openFurnace`/`sleep`/`fish`/`collectBlock.collect` 才是真 Promise。这条以前没记录，`use.js` 里用的 `activateBlock` 是靠 `await raceTimeout` 包的，
-但它 `return` 的是 `undefined` → `raceTimeout(undefined, 5000)` 会走 `promise.then` 报错。**`use.js` 里这是个真 bug，还没修**，见下方待办。
+`openFurnace`/`sleep`/`fish`/`collectBlock.collect` 才是真 Promise。（更正：我先前误记 `activateBlock` 也是这种，查源码后确认 `inventory.js:195` 是 `async function activateBlock`，
+`activateEntity` 同为 async，`use.js` 没有问题。只有 `mount`/`dismount`/`attack`/`swingArm` 是同步发包。）
 
 **上船例子已验**：从文档里抽出代码块 `node --check` 通过，`isVehicle` 对 oak_boat/pale_oak_boat/minecart/horse 为真、sheep 为假；
 假 ctx 跑了 `bot_not_ready`/`no_vehicle`/`not_riding` 三条路径，行为正确。载具名从 mcData 正则推，不写死（每个版本都加新木种的船）。
@@ -260,5 +260,5 @@ README 项目结构里加了指向。
 - 不建议：命令方块（要 op、风险高）、酿造。
 
 **待办**
-1. `use.js` 的 `raceTimeout(bot.activateBlock(...))` 传的是 `undefined`，要改成「发完包 + 轮询窗口/方块状态」。这是文档纪律 3 暴露出的现存 bug。
-2. `mount` 技能本体（文档里只有例子）。
+1. `mount` 技能本体（文档里只有例子，验过语法与早退路径，没接到项目里）。
+2. 文档附录 A 档的其余项：`fish` / `enchant` / `anvil` / `trade` / `collect`。
