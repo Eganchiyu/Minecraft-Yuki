@@ -338,6 +338,26 @@ function summarize (results, steps) {
       parts.push(detail.player ? `把 ${detail.dropped} 个${itemLabel(detail.item)}丢给了对方` : `丢掉了 ${detail.dropped} 个${itemLabel(detail.item)}`)
     } else if (result.skill === 'drop') {
       parts.push(detail.error === 'item_not_in_inventory' ? `身上没有${itemLabel(step.args && step.args.item)}` : `没丢出去${itemLabel(step.args && step.args.item)}`)
+    } else if (result.skill === 'smelt' && result.ok) {
+      parts.push(`烧出了 ${detail.smelted} 个${itemLabel(detail.product)}`)
+    } else if (result.skill === 'smelt') {
+      const why = {
+        no_furnace: '没有熔炉，也没带在身上',
+        no_fuel: '没有能烧的燃料',
+        not_smeltable: `${itemLabel(detail.input)}烧不出东西来`,
+        item_not_in_inventory: `身上没有${itemLabel(detail.input)}`,
+        nothing_smelted: '一炉都没烧出来'
+      }[detail.error]
+      parts.push(why || `没烧出${itemLabel(detail.product)}`)
+    } else if (result.skill === 'sleep' && result.ok) {
+      parts.push('躺下睡着了')
+    } else if (result.skill === 'sleep') {
+      parts.push(detail.error === 'no_bed' ? '附近没有床' : detail.error === 'not_night' ? '天还亮着睡不着' : '没睡成')
+    } else if (result.skill === 'use' && result.ok) {
+      const what = detail.block ? blockLabel(detail.block) : entityLabel(step.args && step.args.entity)
+      parts.push(detail.opened ? `按了${what}，弹出了${detail.opened}` : `按了${what}`)
+    } else if (result.skill === 'use') {
+      parts.push(detail.error === 'no_such_block' ? '附近没找到那个东西' : '没能按下去')
     } else if (result.skill === 'roam' && result.ok) {
       parts.push(`在附近逛了逛，走了约 ${Math.round(detail.travel || 0)} 格`)
     } else if (result.skill === 'roam') {
@@ -347,6 +367,26 @@ function summarize (results, steps) {
     }
   }
   return parts.join('；') || '什么都没做成'
+}
+
+const ITEM_LABELS_EXTRA = {
+  iron_ingot: '铁锭',
+  gold_ingot: '金锭',
+  copper_ingot: '铜锭',
+  raw_iron: '粗铁',
+  raw_gold: '粗金',
+  raw_copper: '粗铜',
+  glass: '玻璃',
+  charcoal: '木炭',
+  cooked_beef: '熟牛肉',
+  cooked_porkchop: '熟猪排',
+  furnace: '熔炉',
+  diamond: '钻石',
+  coal: '煤炭',
+  iron_ore: '铁矿石',
+  oak_door: '橡木门',
+  stick: '木棍',
+  sand: '沙子'
 }
 
 const BLOCK_LABELS = {
@@ -370,11 +410,11 @@ const ENTITY_LABELS = {
 }
 
 function blockLabel (name) {
-  return BLOCK_LABELS[name] || name || '东西'
+  return BLOCK_LABELS[name] || ITEM_LABELS_EXTRA[name] || name || '东西'
 }
 
 function itemLabel (name) {
-  return BLOCK_LABELS[name] || name || '东西'
+  return BLOCK_LABELS[name] || ITEM_LABELS_EXTRA[name] || name || '东西'
 }
 
 function entityLabel (name) {

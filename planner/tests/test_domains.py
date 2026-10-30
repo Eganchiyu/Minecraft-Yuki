@@ -82,6 +82,28 @@ check("域内技能无重复", not any(dup.values()), str(dup))
 unreached = [n for n, d in domains.DOMAINS.items() if not d.keywords]
 check("每个具名域都有路由关键词", not unreached, str(unreached))
 
+# 加技能最容易漏的地方：schema 白名单、说明行、例子、域归属、执行器注册，五处对不上
+from schema import SKILLS  # noqa: E402
+
+check("每个技能都有说明行", not (SKILLS - set(prompts.SKILL_LINES)), str(SKILLS - set(prompts.SKILL_LINES)))
+check("每个技能都有例子", not (SKILLS - set(prompts.SKILL_EXAMPLES)), str(SKILLS - set(prompts.SKILL_EXAMPLES)))
+domained = set()
+for _d in list(domains.DOMAINS.values()) + [domains.GENERAL]:
+    domained |= set(_d.skills)
+check("每个技能至少属于一个域", not (SKILLS - domained), str(SKILLS - domained))
+
+try:
+    import subprocess
+
+    out = subprocess.run(
+        ["node", "-e", "console.log(require('./yuki-bot/sidecar/skills').SKILL_NAMES.join(','))"],
+        cwd=str(Path(__file__).resolve().parents[2]), capture_output=True, text=True, timeout=20,
+    )
+    sidecar = set(filter(None, out.stdout.strip().split(",")))
+    check("planner 白名单与执行器注册一致", sidecar == set(SKILLS), f"仅 planner: {set(SKILLS) - sidecar}；仅执行器: {sidecar - set(SKILLS)}")
+except Exception as exc:  # node 不在也不该拦住别的用例
+    check("planner 白名单与执行器注册一致", False, f"检查失败: {exc}")
+
 
 # ---------- 4. 域 prompt 裁剪：域外技能不出现在 prompt 里 ----------
 def skills_mentioned(text):

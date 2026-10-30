@@ -25,10 +25,12 @@ class Domain:
 
 _GATHER = Domain(
     name="gather",
-    skills=("mine", "goto", "open", "deposit", "drop", "roam"),
+    # 采集域带上 craft/equip：挖矿→烧锭→做镐是一条链，L2 得能一条规划走完
+    skills=("mine", "goto", "smelt", "craft", "equip", "open", "deposit", "drop", "roam"),
     keywords=(
         "挖", "采", "矿", "砍", "伐", "木头", "原木", "石头", "圆石", "煤炭", "铁矿", "钻石",
         "金矿", "红石", "青金石", "绿宝石", "黑曜石", "挖点", "搞点", "弄点", "资源",
+        "烧", "熔", "冶炼", "粗铁", "粗金", "粗铜",
     ),
     brief="""## 采集常识（这一域你比玩家更懂，用不上就别提）
 
@@ -51,8 +53,8 @@ _GATHER = Domain(
 
 **挖矿的现实约束。**
 - 挖一块石头掉一块圆石；石头本身要用「精准采集」才掉，我们没有那个附魔，就别指望。
-- 铁矿、金矿挖出来是粗铁、粗金，要烧成锭才能做工具——**我们目前没有熔炼能力**，
-  所以"挖铁矿做铁镐"这条链是断的，要如实说做不到，不要规划一条走不通的路。
+- 铁矿、金矿挖出来是粗铁、粗金，要用 `smelt` 烧成锭才能做工具（需要熔炉和燃料，一次最多烧 8 个）。
+  "挖铁矿做铁镐"是完整的一条链，可以规划：mine 粗铁 → smelt 成铁锭 → craft 铁镐；但熔炼很慢，别一次要一组。
 - 挖到基岩层就是到底了，不要往下规划。
 - 脚下一格是岩浆或水时不要挖，挖开就掉进去。
 
@@ -61,7 +63,7 @@ _GATHER = Domain(
 
 _CRAFT = Domain(
     name="craft",
-    skills=("craft", "mine", "goto", "equip", "drop", "deposit"),
+    skills=("craft", "mine", "smelt", "goto", "equip", "drop", "deposit"),
     keywords=(
         "合", "造", "做", "制作", "工作台", "工具", "镐", "斧", "锹", "剑", "锄", "木棍", "木板",
         "火把", "台阶", "楼梯", "装备", "熔炉",
@@ -84,8 +86,9 @@ _CRAFT = Domain(
 
 _INTERACT = Domain(
     name="interact",
-    skills=("open", "deposit", "drop", "goto", "equip"),
-    keywords=("箱子", "存", "放进去", "取", "拿回来", "打开", "看看里面", "整理", "丢给", "给你", "交给你", "拿好"),
+    skills=("open", "deposit", "drop", "goto", "equip", "use"),
+    keywords=("箱子", "存", "放进去", "取", "拿回来", "打开", "看看里面", "整理", "丢给", "给你", "交给你", "拿好",
+              "开门", "关门", "按钮", "拉杆", "交易", "村民", "按一下"),
     brief="""## 容器与递东西
 
 **容器。** 箱子 27 格，大箱子 54 格，木桶 27 格，熔炉 3 格。`open` 会走过去打开、把里面的东西记进「记得的地方」，
@@ -100,8 +103,9 @@ _INTERACT = Domain(
 
 _TRAVEL = Domain(
     name="travel",
-    skills=("goto", "follow", "roam", "mine", "place", "drop"),
-    keywords=("去", "来", "过来", "跟着", "跟紧", "带我", "走走", "逛", "散步", "看看周围", "回家", "过来我这边"),
+    skills=("goto", "follow", "roam", "mine", "place", "drop", "sleep"),
+    keywords=("去", "来", "过来", "跟着", "跟紧", "带我", "走走", "逛", "散步", "看看周围", "回家", "过来我这边",
+              "睡觉", "睡一觉", "天黑了", "过夜", "床"),
     brief="""## 走路与跟随
 
 **goto 只在有明确坐标时用，绝不编坐标。** 玩家没给坐标就说"过来/来这里"，用 `follow` 填玩家名，或者让玩家先说坐标。
@@ -149,6 +153,7 @@ GENERAL = Domain(
     skills=(
         "mine", "goto", "follow", "craft", "deposit", "attack",
         "eat", "equip", "place", "roam", "drop", "open",
+        "smelt", "sleep", "use",
     ),
     keywords=(),
 )

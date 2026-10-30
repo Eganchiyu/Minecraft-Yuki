@@ -4,7 +4,10 @@ from typing import Any
 MAX_STEPS = 15
 ON_FAIL = {"retry", "abort", "skip"}
 # 全部技能。一次规划只放行其中一个域的子集（domains.py），这里的全集用于兜底域与合法性自检。
-SKILLS = frozenset({"mine", "goto", "follow", "craft", "deposit", "attack", "eat", "equip", "place", "roam", "drop", "open"})
+SKILLS = frozenset({
+    "mine", "goto", "follow", "craft", "deposit", "attack", "eat", "equip", "place", "roam", "drop", "open",
+    "smelt", "sleep", "use",
+})
 EQUIP_SLOTS = {"hand", "off-hand", "head", "torso", "legs", "feet"}
 MAX_OPTIONS = 3
 MIN_OPTIONS = 2
@@ -46,6 +49,22 @@ def _str(value: Any, field: str, max_len: int = 40) -> str:
     if not isinstance(value, str) or not value.strip():
         raise SchemaError(f"{field} 必须是非空字符串")
     return value.strip()[:max_len]
+
+
+def _coords(args: dict, index: int, required: bool = False) -> dict:
+    """x/y/z 要么全给要么全不给；给了就逐轴校验范围。"""
+    values = [args.get(k) for k in ("x", "y", "z")]
+    if all(v is None for v in values):
+        if required:
+            raise SchemaError(f"steps[{index}].args 必须给 x/y/z")
+        return {}
+    if any(v is None for v in values):
+        raise SchemaError(f"steps[{index}].args 的 x/y/z 必须同时给出")
+    return {
+        "x": _int_range(args.get("x"), f"steps[{index}].args.x", -30000000, 30000000),
+        "y": _int_range(args.get("y"), f"steps[{index}].args.y", -2000, 2000),
+        "z": _int_range(args.get("z"), f"steps[{index}].args.z", -30000000, 30000000),
+    }
 
 
 def _normalize_step(step: Any, index: int, allowed: frozenset = SKILLS) -> dict:
@@ -148,6 +167,31 @@ def _normalize_step(step: Any, index: int, allowed: frozenset = SKILLS) -> dict:
             clean["item"] = _str(args.get("item"), f"steps[{index}].args.item")
         if args.get("count") is not None:
             clean["count"] = _int_range(args.get("count"), f"steps[{index}].args.count", 1, 2304)
+    elif skill == "smelt":
+        clean = {
+            "input": _str(args.get("input") or args.get("item"), f"steps[{index}].args.input"),
+            "count": _int_range(args.get("count", 1), f"steps[{index}].args.count", 1, 8),
+        }
+        coords = _coords(args, index, required=False)
+        if coords:
+            clean.update(coords)
+        if args.get("radius") is not None:
+            clean["radius"] = _int_range(args.get("radius"), f"steps[{index}].args.radius", 1, 32)
+    elif skill == "sleep":
+        clean = _coords(args, index, required=False)
+    elif skill == "use":
+        clean = {}
+        if args.get("block") is not None:
+            clean["block"] = _str(args.get("block"), f"steps[{index}].args.block")
+        if args.get("entity") is not None:
+            clean["entity"] = _str(args.get("entity"), f"steps[{index}].args.entity")
+        if not clean.get("block") and not clean.get("entity"):
+            raise SchemaError(f"steps[{index}].args 要给 block 或 entity 之一")
+        coords = _coords(args, index, required=False)
+        if coords:
+            clean.update(coords)
+        if args.get("radius") is not None:
+            clean["radius"] = _int_range(args.get("radius"), f"steps[{index}].args.radius", 1, 32)
     elif skill == "roam":
         clean = {}
         if args.get("radius") is not None:

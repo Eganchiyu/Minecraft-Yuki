@@ -210,3 +210,30 @@
 
 **当前状态**：planner 可正常起（`domains.py` 是新依赖，与 `prompts.py` 互相无环）。世界仍停着（25565/8790/8791 空）。
 **待办（未做，等机主定）**：五条生存链（MLG 落地水/水下憋气/脱困）、GUI+熔炉技能、`ErrorKind` 式失败码枚举。其中熔炉是采集域「铁链断掉」的根因，优先于其它技能。
+
+## 2026-10-30 加 3 个技能：smelt / sleep / use（熔炉通了）
+
+机主："现在连熔炉都用不了诶"。加 `smelt`、`sleep`、`use`，技能从 12 → 15。
+
+**加一个技能要碰 5 处**（这次没重构，加了自检测试兜住）：
+`sidecar/skills/<名>.js` → `sidecar/skills/index.js` 注册 → `planner/schema.py` 白名单 + `_normalize_step` 分支 → `planner/prompts.py` 的 `SKILL_LINES`+`SKILL_EXAMPLES` → `planner/domains.py` 域归属 → `sidecar/tasks.js` 的 `summarize`（给 L1 的那句人话）。
+
+**smelt.js**
+- minecraft-data 26.1 的 `recipes.json` 只有合成、**没有烧炼配方**（`mcData.furnaces` 为 false），所以烧炼表与燃料表写死在技能里，只收稳定项。
+- 燃料按秒算（煤 80s、煤块 800s、木板/原木 15s、木棍 5s），按「够用前提下挑烧得久的」选。
+- 只认普通 `furnace`：高炉烧不了食物、烟熏炉烧不了矿，混用会白等。
+- 没熔炉时用 `place` 现放一个；`putInput`→等（input 空或超时）→`takeOutput`；硬校验看成品在背包里真的多了。
+- 一次最多 8 个：一炉 10 秒，再多顶到单步超时（`stepTimeoutMs`=120s）。
+
+**sleep.js**：白天直接拒（`not_night`），附近找床，`bot.sleep`，校验 `bot.isSleeping`。
+**use.js**：对方块 `activateBlock`、对生物 `activateEntity`；开出来的窗口立刻关掉并报告类型（我们还没有操作窗口的能力，留着会卡住后续技能）；门/按钮/拉杆按了没变化判失败。
+
+**域调整**：gather 加上 smelt/craft/equip（挖矿→烧锭→做镐是一条链，得能一条规划走完，否则 L2 会写出域外的 craft 被拒）；interact 加 use；travel 加 sleep。专家册里原来写的「我们没有熔炼能力」全部改掉了。
+
+**验证**
+- `node yuki-bot/scripts/skills-test.js` 45/45：烧炼表/燃料表/无自环、三技能注册、意图校验、摘要人话、以及 `smelt` 七条早退路径（未就绪/取消/缺参/未知/不可烧/没原料/没熔炉）用假 bot 跑真代码。
+- `planner/tests/test_domains.py` 44/44，新增四项防漏检查：每个技能都有说明行、都有例子、至少属于一个域、**planner 白名单与执行器注册一致**（直接读 node 的 `SKILL_NAMES`，防两边漂移）。
+- `test_p2.py` 30 过 1 挂（既有）、`test_memory.py` 43/43。
+- 真模型 4 例：`把这几个粗铁烧成铁锭`→`smelt raw_iron×6`；`挖点铁矿然后烧成铁锭做把铁镐`→`mine→smelt→craft` 完整链；`天黑了去睡一觉`→`sleep`；`把门打开`→`use oak_door`。`invalid_rate=0`。
+
+**未做**：熔炉的真实端到端验收（要起服）。`smelt` 的 putInput/takeOutput 时序只在单测与源码层面验过，没在真服务端跑过一炉。

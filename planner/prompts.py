@@ -61,6 +61,9 @@ SKILL_LINES = {
     "roam": '10. roam — 在附近随便走一走看看（不需要坐标）。args: {"radius":4-48(可选),"stops":1-6(可选)}',
     "drop": '11. drop — 把背包里的东西丢出去（给玩家东西就用它，会自动先走到那个玩家身边）。args: {"item":"<物品ID>","count":1-2304(可选),"player":"<英文ID>"(可选)}',
     "open": '12. open — 打开附近或指定坐标的箱子看看里面有什么（会把内容记进「记得的地方」）。args: {"x":整数,"y":整数,"z":整数(可选),"item":"<物品ID>"(可选),"radius":1-32(可选)}',
+    "smelt": '13. smelt — 用熔炉烧东西（铁矿石/粗铁→铁锭，沙子→玻璃，生肉→熟肉，原木→木炭）。没有熔炉会把背包里的放一个。很慢，一次最多 8 个。args: {"input":"<原料ID>","count":1-8,"x":整数,"y":整数,"z":整数(可选),"radius":1-32(可选)}',
+    "sleep": '14. sleep — 睡一觉把夜晚跳过去（需要附近有床，白天睡不了）。args: {"x":整数,"y":整数,"z":整数(可选)}',
+    "use": '15. use — 对一格方块或一个生物按右键：开门、按按钮、拉杆、床、工作台、和村民说话。args: {"block":"<方块ID>","entity":"<实体ID>"(二选一),"x":整数,"y":整数,"z":整数(可选),"radius":1-32(可选)}',
 }
 
 # ---- 每个技能的一条真实例子：输出格式的示范用它，换域就换例子 ----
@@ -77,6 +80,9 @@ SKILL_EXAMPLES = {
     "roam": '{"skill":"roam","args":{"radius":16,"stops":3},"on_fail":"retry"}',
     "drop": '{"skill":"drop","args":{"item":"iron_ore","count":5,"player":"xiaochi2788"},"on_fail":"retry"}',
     "open": '{"skill":"open","args":{"radius":16},"on_fail":"retry"}',
+    "smelt": '{"skill":"smelt","args":{"input":"raw_iron","count":4},"on_fail":"retry"}',
+    "sleep": '{"skill":"sleep","args":{},"on_fail":"retry"}',
+    "use": '{"skill":"use","args":{"block":"oak_door"},"on_fail":"retry"}',
 }
 
 # ---- 通用规则：(这条规则需要的技能, 文本)。需要的技能不在本域就不发这一条 ----
