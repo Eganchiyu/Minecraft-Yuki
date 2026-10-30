@@ -40,3 +40,7 @@ configs/local.json
 planner/state/
 
 planner/tests/__pycache__/
+
+# ===== 其他 =====
+
+repository.txt
