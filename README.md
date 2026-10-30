@@ -1,0 +1,178 @@
+# Yuki × Minecraft — 住在方块世界里的 AI 虚拟玩家
+
+[![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Node.js Version](https://img.shields.io/badge/node-22.23+-green.svg)](https://nodejs.org/)
+[![Mineflayer](https://img.shields.io/badge/mineflayer-4.39.0-orange.svg)](https://github.com/PrismarineJS/mineflayer)
+[![DeepSeek](https://img.shields.io/badge/LLM-DeepSeek--Flash-green.svg)](https://www.deepseek.com/)
+
+> **"哥哥大人，这个全都是方块的世界好神奇！Yuki 会努力学着挖矿的，不会再掉进岩浆里啦！"**
+
+本项目是将个人智能助手「Yuki」接入 Minecraft（我的世界）的独立 Embodied AI（具身智能）适配层。有别于为了刷 Benchmark 或速通而设计的无感情 Agent 框架，本项目的核心目的是**让 Yuki 作为一个有血有肉的玩家在 MC 世界里生活**。她听得懂自然语言，会自主寻路挖矿，遇到怪会逃跑，也会在无聊时自己到处乱逛，并且能在干活的同时陪你聊天。
+
+---
+
+## 核心特性
+
+### 🧠 三层解耦系统 (分层 Agent 架构)
+系统将“大脑”与“小脑/脊髓”彻底分离，保证人格不降智、动作不卡顿：
+- **L1 灵魂层 (Python `planner/`)**：负责 Yuki 的情绪、记忆、自主意识和日常聊天。只有当她决定“要动手”时，才会调用唯一的 `intention` 工具。
+- **L2 规划器 (Python `planner/`)**：纯无状态的翻译官，将“去挖20个圆石”转化为机器可执行的 JSON 步骤。配备单任务预算（Tokens/重试次数限制），防止死循环烧钱。
+- **L3 侧车执行器 (Node.js `yuki-bot/`)**：基于 Mineflayer 的常驻状态机，负责所有毫秒级的 tick 响应、硬校验（方块增量、坐标到达）与底层运动闭环。
+
+### 🤝 失败协商机制 (Negotiation)
+L2 并不是“全知全能”的。当执行器（L3）遇到无法解决的物理障碍（如缺工具、找不到方块、路不通），它会向 L2 返回**结构化事实**。L2 自动重规划两次后若仍失败，会向 L1 提供 2-3 个人类可读的可选方案，由 Yuki 自己决定是“先去造一把木镐”还是“算啦，换个事做”。
+
+### 🛡️ 守护状态机 (Guardian System)
+最高优先级（Priority 9）的硬编码保命逻辑，模型无权干涉：
+- 受到攻击 / 血量过低 (≤6) / 饥饿值临界
+- 脚下踩到岩浆 / 跌入虚空
+- **自动抢占**：一旦触发，立刻打断当前 LLM 规划的长期任务，强制执行逃跑、后退或自动进食，并在脱险后将“任务被打断”的事实交还给大脑。
+
+### 📖 独立世界记忆 (Memory & History)
+- **世界隔离**：每切换一个存档或服务器，Yuki 都会拥有一个独立的数据分区（`state/worlds/<world>/`），记忆绝不串味。
+- **双池召回引擎**：照搬主仓库的记忆系统，采用 ChromaDB 向量语义检索 + jieba 关键词覆盖率打捞，辅以指数时间衰减，确保她能记住“昨天你让她造的家在哪”。
+
+### 🎮 拟真自主性 (Autonomy)
+- **不是无情打工机**：空闲时会触发好奇心循环（Novelty），随机漫游（Roam）、观察新方块或仅仅是发呆。
+- **事件驱动唤醒**：平时 0 API 调用；遇到高危事件（天黑、受击、有玩家靠近建造）会被事件流强行唤醒并作出反应。
+- **状态注入 (Ephemeral Status)**：当前所处坐标、血量、周边玩家、正在执行的动作，仅作为单槽临时状态附着于当前 Prompt 中，不污染历史对话上下文。
+
+---
+
+## 功能玩法大赏
+
+### 1. 随叫随到的小帮手
+在公屏打字 `yuki 去挖点石头`。Yuki 会用自己的语气回应一句，然后在后台生成指令去挖石头。
+她目前掌握 12 项生存技能，包括：
+- `mine`: 采集指定方块（自动判断需要什么工具）。
+- `craft`: 递归合成（如果你让她造木镐，她会自动合成木板、木棍，甚至自己放一个工作台）。
+- `follow`: “跟着我”，持续追踪，直到你让她停下。
+- `goto`: 寻路到特定坐标，自动避障搭桥。
+- `deposit` & `open`: 智能寻找附近的箱子并存取物品。
+
+### 2. 边干活边聊天
+因为 L1 和 L3 是跨进程解耦的，Yuki 在耗时 3 分钟的下矿过程中，你依然可以随时在公屏问她“你在干嘛呀？”，她能秒回真实进度（如“还差八块石头呢”），并且**完全不中断正在执行的挖矿动作**。
+
+### 3. 造工具与自我修正
+如果 Yuki 空手，你让她去挖石头。她不会傻傻地去用手敲（这不掉落任何东西），而是会：
+1. L3 硬校验发现：缺少对应 `harvestTools`。
+2. L2 重规划：发现背包连木头都没有，决定告诉 Yuki “做不到”。
+3. Yuki 会对你说：“哥哥，人家没有能挖石头的工具，要不我先去砍点木头造个木镐吧？”
+
+---
+
+## 系统流程
+
+```text
+玩家 (公屏聊天) ──┬─→ [L1 Yuki：人格层 + 记忆 + 自然语言] (Python, 按需唤醒)
+                 │            │ send_intention()           ▲ 异步汇报/失败协商
+                 │            ▼                            │
+                 └─→ [L2 规划器：中文 → 有序步骤 JSON]  (Python, 自动重试修复)
+                              │ JSON Steps                 ▲ 结构化失败事实
+                              ▼                            │
+                    [L3 侧车：状态机 + 技能库 + 守护逻辑] (Node.js, 常驻阻塞)
+                              │                            │ 
+                              ▼ (Mineflayer API)           │ (Events & State)
+                         Minecraft Server (26.1.2) ────────┘
+
+```
+
+---
+
+## 项目结构
+
+```
+Yuki-Minecraft/
+├── configs/                 # 配置中心 (local.json 包含凭证信息，.gitignore)
+├── planner/                 # L1/L2 大脑服务 (Python 3.11)
+│   ├── app.py               #   HTTP 服务入口 (/chat, /plan, /callback, /event)
+│   ├── l1.py                #   人格层与失败链条管理
+│   ├── mind.py              #   心智主循环（空闲唤醒、日常对话、调用派活工具）
+│   ├── schema.py            #   L2 步骤的严格校验器（过滤模型幻觉/不支持操作）
+│   ├── memory.py            #   双池向量召回引擎
+│   ├── facts.py             #   失败事实提取与协商选项生成
+│   └── state/worlds/        #   长期记忆/世界字典落盘目录
+│
+├── yuki-bot/                # L3 执行器服务 (Node.js 22)
+│   ├── sidecar/             #   状态机侧车源码
+│   │   ├── index.js         #     HTTP/SSE 事件推送端点
+│   │   ├── tasks.js         #     队列、抢占、任务硬终止控制
+│   │   ├── guardian.js      #     Priority 9 绝对保命逻辑
+│   │   └── skills/          #     矿、走、跟、造、存、打、吃等 12 项技能实现
+│   └── scripts/             #   大量纯端到端自动化验收脚本
+│
+├── server/                  # 供本地调试用的 MC 服务端目录 (需自备 server.jar)
+└── scripts/                 # 一键启停、验证脚本集合
+
+```
+
+---
+
+## 快速开始
+
+### 1. 环境准备
+
+由于本项目直接与 Minecraft 底层协议交互，且涉及双端进程，对环境要求较为严格：
+
+* **Node.js**: ≥ 22.23 (受 Mineflayer 4.39.0 限制)
+* **Python**: ≥ 3.11
+* **Java**: Java 25 (运行 26.1 版本的 MC 服务端必须)
+* **Minecraft**: 游戏与客户端协议必须为 **26.1 (Protocol 775)**。*(注：26.2/Protocol 776 会出现严重丢包无法使用)*
+
+### 2. 配置凭据
+
+复制配置文件模板并填入你的大模型 API 密钥：
+
+```bash
+cp configs/local.example.json configs/local.json
+# 编辑 configs/local.json 填入你的 llm.api_key，默认使用 DeepSeek Flash 接口
+
+```
+
+### 3. 一键起服体验
+
+我们提供了一套集成脚本，能够同时拉起：MC 服务端、Python 规划器、Node.js 执行器侧车。
+
+```bash
+# 安装 Python 依赖
+cd planner && pip install -r requirements.txt
+# 安装 Node 依赖
+cd ../yuki-bot && npm install
+
+# 启动常驻世界（自动把 pid 写入临时目录以便关闭）
+cd ..
+bash scripts/world-up.sh
+
+```
+
+启动成功后，你可以用离线版的 `26.1.2-Fabric` 客户端连接 `127.0.0.1:25565` 进服。在公屏打字包含 `yuki`，她就会理你了。
+
+收工时请**务必优雅停服**（防止存档损坏）：
+
+```bash
+bash scripts/world-down.sh
+
+```
+
+---
+
+## 技术栈与设计约束
+
+| 类别 | 选型 | 备注 |
+| --- | --- | --- |
+| **MC 底层控制** | Mineflayer (Node) | 放弃 Fabric Mod 注入开发。利用无头客户端直接读写协议栈。 |
+| **基础小脑控制** | Prismarine 生态 | 复用现成的 pathfinder (A*寻路), collectblock 等插件。 |
+| **通信机制** | HTTP + Server-Sent Events | Python 与 Node.js 之间通过短连接派发任务，SSE 推送实时游戏事件（受击、天黑）。 |
+| **模型推理** | 云端 API 驱动 | **本机无 GPU 负担**。状态切片经过高度压缩（JSON+结构化文本），实测每轮对话 Token 消耗极低，且配置了 `disable_thinking=true` 以加速响应。 |
+| **代码红线** | 原始数据隔离 | MC 每秒海量的 tick 事件、方块全量更新、原始坐标等数据，**坚决不允许进入 L1 大脑**，必须在侧车收敛为简短的中文状态注入。 |
+
+---
+
+## 致谢
+
+* [PrismarineJS / Mineflayer](https://github.com/PrismarineJS/mineflayer): 提供了难以置信且强大的 Node.js 协议层实现。
+* 本项目最初灵感来源于与主系统 `YukiV6` 的接入构想（见 `LLM接入MC方案.md`）。
+
+---
+
+*最后更新：2026/10/30 · Yuki × Minecraft P2/P3 阶段*
