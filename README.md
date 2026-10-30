@@ -198,4 +198,4 @@ bash scripts/world-down.sh
 
 ---
 
-*最后更新：2026/10/30 · Yuki × Minecraft P2/P3 阶段*
+*最后更新：2026/10/30 · P0–P3 已完成，进入 P4 体验闭环（见 `docs/PRD.md` v0.3）*

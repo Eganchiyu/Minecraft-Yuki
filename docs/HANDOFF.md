@@ -127,124 +127,47 @@ free -g | head -2
 
 ---
 
-## 2. 当前状态（2026-10-28 深夜，P2 后）
+## 2. 当前状态（2026-10-30 收工，P4 前）
 
-**已完成**
+**一句话**：P0–P3 全通，15 项技能 + L2 分域专家 + 四态反射机（含 MLG）已落地；世界当前**全停**（25565/25566/8790/8791 空）。下一步是 PRD v0.3 的 **P4 体验闭环**，从 P4.0（观战截图链路验证）开始。
 
-- P0 全部：26.1.2 服务端 ×2、mineflayer 4.39.0 项目、登录/寻路/聊天指令闭环、真人实测通过
-- 插件 26.1 兼容性实测：pathfinder / collectblock / pvp / tool / armor-manager / auto-eat / statemachine 全部可用
-- 截图链路验证：`ffmpeg x11grab` 出图成功；prismarine-viewer 因版本上限（1.21.4）放弃
-- `PRD.md` v0.2：三层架构、接口契约、上下文预算、自主性设计、P0–P6 分阶段
-- 关键决策全部冻结（见第 4 节）
-- **M0 竖切片完成并实测通过（10/10）**：公屏中文 → L2 出步骤 → L3 执行 → 硬校验 → 回调 → 她用自己的语气汇报。见第 3 节
+**已完成（按时间）**
 
-**M0 落地形态（与 PRD 原设计的差异，已冻结见第 4 节 #15–#17）**
+- P0 / M0 / P1 / P2：见 `memo/Log.md`。最新数字：P1 19/19、P2 挖矿 7/10（3 次为守护抢占）、真实规划 0 非法 JSON
+- P3：本仓库独立 L1（人格 prompt + 唯一 `intention` 工具）、任务回调、单槽状态注入、`rest`、低优先级事件 30s 聚合、idle tick、`/home/asumi/Yuki` 不接（决策 #15 保持）
+- 记忆：世界分区 `planner/state/worlds/<world>/`（history / memory.jsonl / chroma），向量 + jieba 双池召回，43/43 单测
+- L2 分域：`domains.py` 5 域 + 兜底 general，域内技能白名单 + 专家册 + `notes` 回流 L1；44/44 单测
+- 技能 15 个：mine goto follow craft deposit attack eat equip place roam drop open smelt sleep use（加技能流程见 `docs/技能开发指南.md`）
+- `guardian.js` 四态机 idle/defend/flee/recover + `mlg` 自救；`reflex-test.js` 29/29、`mlg-test.js` 18/18
+- 客户端换肤：CustomSkinLoader 本地皮肤 `Yuki-chan.png`（只对机主客户端可见），**尚未肉眼验收**
 
-- 三层各自独立进程：`planner/`（Python，L1 人格 + L2 规划，:8791）、`yuki-bot/sidecar/`（Node，L3 状态机/技能/硬校验，:8790）、Minecraft 服务端
-- **不接 Yuki 本体**：人设 prompt 在本仓库独立维护（语气参考 `core/prompts.py`），不 import 那个仓库的任何代码
-- 公屏通道：侧车把含关键字 `yuki` 的聊天 `POST planner /chat`，回复用 `POST /say` 写回公屏
-- 实测数据（`scripts/m0-run.sh`）：首句回话 3.3s、挖矿途中插话 1.1s 不阻塞、单任务 LLM 调用 4 次（听+规划+应声+汇报）
+**未验 / 已知欠账**
 
-**P1 已完成（2026-10-28，`scripts/p1-run.sh` 19/19，全程不调模型）**
-
-- 守护逻辑 priority 9：受击 / 低血(≤6) / 脚下岩浆 / 虚空(y<-50) / 饥饿(≤6) → 冻结队列 → 抢占任务（`aborted` 上报）→ 保命动作（逃生 / 退开 / 进食）
-- 技能补齐到 8 个：`mine` `goto` `follow` `craft` `deposit` `attack` `eat` `equip`，全部有硬校验
-- 队列语义：同级抢占、低优先级排队上限 3（第 4 个 429）、priority 9 直投 400
-- 取消兜底复位：goal / collectblock / pvp / 容器 / 控制状态，实测 2–28ms 回 idle
-- 固定场景回归：空地（goto 10/10）、树林（mine+craft）、矿洞（mine stone）、全链路 mine→goto→deposit（185 件入箱）
-- `craft` 升级为递归合成：自动补木板/木棍，需要 3×3 时**自己造并放下工作台**；新增 `place` 技能；`mine` 对需要工具的方块先查 `harvestTools`，缺工具直接 `missing_tool`（不再让 collectBlock 空转到 OOM）
-- `deposit` 支持坐标或 16 格内最近容器
-- M0 回归复测 10/10 通过（新增技能未破坏 L1/L2 链路）
-
-**P2 已完成（2026-10-28 深夜，`scripts/p2-run.sh` + `--only=diamond`）**
-
-- L2 接 9 技能：自然语言 10 句覆盖 9 技能全部命中（含 craft/place/deposit/attack/eat/equip）
-- 失败协商（决策 #22）：L3 硬校验失败 → L2 带「期望 vs 实际」自动重规划，retry 上限 2；用尽后 L2 出 2–3 个方案，L1 用 `send_intention` 选一个或放弃，最多一轮
-- 单任务预算（`planner/budget.py`）：calls≤10 / tokens≤12000 / 300s / retries≤2，LLMClient 每次真实调用记账，超限降级成一句人话；L3 增加整条委托时间上限与「确定性错误不重试」
-- 规划器指标 `/stats.plan`：invalid / invalid_rate / repairs / rejected；实测 24 次真实规划 **0 非法 JSON**
-- 实测：10 次「挖 20 圆石」**7/10**（3 次是机主在服里打她，守护按设计抢占 aborted，不算执行失败；其余 7 次均 20 块、平均规划 0.95s）
-- 实测升级链：`/dispatch` 远古残骸 → 原始失败 → 重规划 2 轮（补镐/工作台）→ L2 出方案 → L1 决断 → 18.8s 内回 idle + 人话收尾，预算 6 次调用 / 5134 token
-- 单测 `planner/tests/test_p2.py` 28/28（13 类非法计划全拦截、预算、事实提取、修复重试）
-- 修复既有 bug：`/state.queue`、`/state.current` 字段名不匹配（`queueBrief`）一直返回 undefined
-- **跟随语义（机主定调）**：`follow` 不给 `seconds` 就是持续跟随，直到被取消/新委托抢占/跟丢（1 小时兜底）；跟随时 L2 保持占用（任务槽不空），L1 可随时改派；任务终态后释放该委托的工作记忆（`chains` 归零）。实测：20 秒后仍在跟、新委托 0ms 抢占（旧任务 `aborted/preempted`）、终态后 chains=0
-- 追加修复（机主实测「come here」过不来）：`/state` 新增 `players`（真实 ID + 坐标 + 距离），prompt 规定「过来→goto 玩家坐标 / 跟着我→follow 真实 ID」；实测「come here」4.4s 走到玩家身边（距离 1.58）；同时修好失败事实对扁平回调的提取与 escalation 的 502 误报
-
-**当前运行态（收工时）**
-
-- 常驻世界在跑：主服 :25565（pid 见 `/tmp/yuki-world/server.pid`）、planner :8791、sidecar :8790；机主可随时进服。要停：`bash scripts/world-down.sh`
-- 跑会重启服务器的验收脚本（`p2-run.sh` / `p1-run.sh`）前先确认没人在服里，否则守护抢占会混进成功率
-
-**尚未成型的 / 下一步**
-
-- P2：L2 规划器接新技能（schema 与 prompt 已扩到 8 个）、失败升级路径、单任务预算
-- 记忆与日记、事件播报、自主性、视觉（P3 之后）
+- `smelt` 未在真服务端跑过一炉（putInput/takeOutput 时序只在单测与源码层验过）
+- `mlg` 真实坠落未验（触发 3.5 格、等水 800ms、等落地 3s 均为估算）
+- pvp 实战（走位、举盾、苦力怕）未验
+- `test_p2.py` 30 过 1 挂（既有「超过 5 步」用例与 `MAX_STEPS=15` 不符，与功能无关）
+- 常驻世界默认停；要起用 `bash scripts/world-up.sh`
 
 ---
 
-## 3. 下一步：P3（P2 已完成 ✅）
+## 3. 下一步：P4 体验闭环（PRD v0.3）
 
-**M0 交付（2026-10-28 完成，10/10 实测通过）**
+机主定调：**不接持续视觉**。先把「结构化世界 → 注意力筛选 → 压缩经历 → L1 自主反应/忽略 → 经历记忆」跑通，截图只是 P5 的可选传感器。
 
-1. [x] `yuki-bot/sidecar/`：常驻 Node 进程，`POST /intention`、`POST /cancel`、`GET /state`、`GET /events`(SSE)、`POST /say`、`GET /health`
-2. [x] 三个技能 `mine` / `goto` / `follow`，统一签名 `async (args, ctx) => {ok, detail}`
-3. [x] 硬校验：背包增量（查 `block.drops` 而不是按名字猜）、到达判定（xz≤range+1 且 dy≤2）、跟随时距；模型不参与
-4. [x] `POST /plan`（在 `planner/`，:8791）：中文→步骤，schema 校验 + 一次修复重试 + 非法 422 拒收（8 类非法输入已单测）
-5. [x] L1 人格层 + `send_intention` 工具调用：听公屏 → 规划 → 下发 → 用自己语气应一声；任务完成回调后主动汇报
-6. [x] 状态注入：`status/task/note/reply` 四字段，单槽临时，只拼进本轮 messages，不进历史
+按顺序做，每步独立可演示：
 
-**验收实测结果（`bash scripts/m0-run.sh`）**
+1. [ ] **P4.0 截图链路人工验证**：起服 + sidecar + spectator 客户端，让 Yuki 移动/转头，确认 `ffmpeg x11grab` 抓到的画面是否跟随；结论写回 PRD/HANDOFF。不同步则截图限定人工触发，不阻塞 P4
+2. [ ] **P4.1 经历数据结构与落盘**：`Experience` / `ExperienceCapsule`、去重键、世界分区、过期与截断；纯函数单测（序列化/去重/重启恢复）
+3. [ ] **P4.2 World Observer + Event Grouper**：先做 `new_entity`（初遇实体）、`block_change_cluster`（短静默窗口 + 空间相邻的人工方块变化）、`landmark_arrival`、`task_milestone`；不做建筑语义断言
+4. [ ] **P4.3 Salience Scorer + Attention Scheduler**：配置化权重（novelty / surprise / interest / social / progress / repeat penalty / interruption cost / confidence）；记录阈值、唤醒阈值、截图阈值三者分开；任务或反射期间只记录
+5. [ ] **P4.4 Capsule → L1**：压成一两句人话 + 有限选项（含 ignore/no_action），复用现有事件唤醒路径；行动仍走 intention → L2 → L3；经历写入记忆
+6. [ ] **P5（后续）**：Snapshot Scheduler（开关/间隔/配额/稳定窗口）、Vision Adapter、主动观察、爱心端到端验收
+7. [ ] **P6（后续）**：按真实使用反馈决定兴趣权重、心愿、mood、锚点；回归与长跑
 
-| # | 条目 | 结果 |
-|---|---|---|
-| ① | 公屏「yuki 去挖点石头」→ 她回一句人话 + 任务下发成功 | PASS（3.3s） |
-| ② | 挖到 ≥3 石头，背包硬校验可见增量 | PASS（实挖 5/16 块，视 L2 给的 count） |
-| ③ | 完成后主动汇报，无 JSON/坐标/堆栈 | PASS |
-| ④ | 挖矿途中仍能回话、不阻塞 | PASS（1.1s 回复，任务继续） |
-| ⑤ | 单次任务 API 调用 ≤ 4、`disable_thinking=true` | PASS（听 1 + 规划 1 + 应声 1 + 汇报 1 = 4） |
+**P4 总验收**：初遇实体、建造候选、任务里程碑各完成一次「发现 → L1 反应或忽略 → 经历落盘」；外部指令能立即接管低优先级体验行动；任务与守护无明显延迟。
 
-**P1 · 侧车状态机与技能库（2026-10-28 完成 ✅，19/19）**
-
-1. [x] 守护逻辑 priority 9：受击 / 低血 / 脚下岩浆 / 虚空 / 饥饿 → 抢占并 aborted 上报（`sidecar/guardian.js`）
-2. [x] 技能补齐：`craft`（2×2）、`deposit`、`attack`、`eat`、`equip`
-3. [x] 队列语义验收：同级抢占、低优先级排队上限 3、priority 9 拒收、连续 10 次 goto 10/10
-4. [x] 固定测试场景集（空地 / 树林 / 矿洞）+ 回归脚本 `scripts/p1-run.sh` / `yuki-bot/scripts/p1-test.js`
-5. [x] 任务取消的兜底复位（goal / collectblock / pvp / 容器 / 控制状态）
-
-**P2 · L2 规划器（2026-10-28 完成 ✅）**
-
-1. [x] `POST /plan` 接 9 技能 schema + 自然语言覆盖 `craft/place/deposit/attack/eat/equip`（10 句覆盖全部 9 技能）
-2. [x] **失败协商契约（决策 #22）**：L3 失败 → L2 带「期望 vs 实际」自动重规划（retry 上限 2）→ 仍失败把结构化事实 + 2–3 个方案交回 L1，L1 选一个重新下发或放弃，最多一轮
-3. [x] 单任务预算：calls / tokens / 时间 / retry（默认 2），L3 也加了整条委托时间上限与确定性错误快速失败
-4. [x] P2 验收：挖 20 圆石 7/10（3 次为机主在服里打她触发守护，非执行失败）；不可达目标（远古残骸）2 轮重规划 + 1 轮协商后 idle，人话原因；真实规划 24 次 0 非法 JSON
-
-**新增调试/验收通道**：`POST /dispatch {text, priority}`（planner:8791）跳过人格措辞直接下发，仍走完整 Chain（预算 + 失败升级），供脚本稳定复现升级路径。
-
-**P2 收尾补充（2026-10-28 深夜）**
-
-- `follow` 持久化：不给 `seconds` = 持续跟随；`tasks.js` 对开放跟随豁免整条委托超时；prompt 规定「跟着我」不给 seconds、持续动作 priority 3–4（方便被接手）
-- `p2-test.js --only=follow`：持续跟随 / 随时改派 / 工作记忆释放（最后一次干净跑 5/6，唯一 FAIL 是测试自身的事件竞态误报（已修，但修完那轮被叫停未重跑）；行为本身在日志里已验证）
-
-**下一步：P3 · 让 Yuki 有自己的脑子（不做「车万女仆」）**
-
-机主定调：P3 不是把 L1 做成更听话的女仆，而是**接上她自己的脑子**——人格、记忆、偏好、想做的事，由她自己决定要不要派活。L2 只是她的「运动皮层」，不是她的意志。
-
-1. [ ] 接 Yuki 本体：`send_intention` 作为 `ToolSpec(group="minecraft")` 接入 `/home/asumi/Yuki/core/toolchain.py`（先看它的接口，别重造）
-2. [ ] MC 场景 prompt 变体：允许动作播报、口语化，仍禁止 JSON/坐标/工具名
-3. [ ] 回调注入：`task_done` / `event` 转普通消息进 `session_pipeline`，复用现成会话流水线
-4. [ ] 闲置与休息：事件驱动唤醒（无事件零调用）、`yuki rest <分钟>`、低 severity 事件 30s 聚合
-5. [ ] 记忆打标 `scene:mc`、`chat_id=mc:world`，与 QQ 记忆共享但检索隔离
-6. [ ] 临时状态单槽注入（PRD 3.4）+ `reply=no_reply` 抑制输出
-7. [ ] 为 P4 自主性留接口：心愿单 top1 注入、`origin=self_play` 的低优先级意图
-
-**P3 验收（草案）**：①公屏说话她用自己的语气回应且能派活 ②任务完成主动汇报、无 JSON ③无事件时 0 API 调用 ④`rest` 期间只有 severity≥7 唤醒 ⑤记忆写入带 `scene:mc` 且能召回
-
-1. [ ] `send_intention` 作为 `ToolSpec(group="minecraft")` 接入 Yuki 本体 `core/toolchain.py`
-2. [ ] MC 场景 prompt 变体 + 回调注入（复用 `session_pipeline`）
-3. [ ] 闲置与休息机制：事件驱动唤醒、`yuki rest <分钟>`、低 severity 事件 30s 聚合
-4. [ ] 记忆打标 `scene:mc`、`chat_id=mc:world`
-5. [ ] 临时状态单槽注入（PRD 3.4）+ `reply=no_reply` 抑制输出
-
-**当前阶段明确不做**：`smelt`（熔炉）、事件播报、自主性、视觉、多玩家权限。
+**顺带可做（非 P4 阻塞项）**：`mount` 技能本体、`fish`/`collect`、`smelt` 真服验收。
 
 ## 4. 已冻结决策（不要在新 session 里重新讨论）
 
@@ -282,6 +205,11 @@ free -g | head -2
 | 30 | **世界 = 记忆的作用域**：记忆/对话/状态按世界分区落 `planner/state/worlds/<world>/`，注入的回忆天然只来自当前世界；world 取值优先级 `MC_WORLD` > `mc.world` > `host_port` | 机主要求：换世界就换记忆，回忆不能串味；LAN 端口会变，所以世界名能手写 |
 | 31 | 召回照搬 Yuki 的 `memory/rag.py`：**向量池宽进 + jieba 关键词覆盖率打捞 + 时间衰减重排**，融合后取 top-3 压成一条 `【回忆】` system 注入；JSONL 是唯一真相，向量索引可重建，缺依赖自动退化为纯关键词 | 机主指定照搬她那套效果好的算法；JSONL 能 grep 能手工修，索引坏了不丢数据 |
 | 32 | 对话历史**全量落盘**（`history.json`，tmp + `os.replace` 原子替换，上限 400 条），prompt 仍只喂最近 3 轮；日记触发改成「自上次总结后满 12 轮」 | 机主要求关闭程序不清记忆；窗口仍受控，防止上下文膨胀 |
+| 33 | **P4 重定义为「体验闭环」**：先做结构化世界的注意力筛选与经历，不接持续视觉；截图是可选的 P5 感知接口 | 机主愿景是让 Yuki 享受游玩、注意到有趣的事；持续截图既贵又不符合「主动感知」 |
+| 34 | 体验编排层（Observer / Grouper / Scorer / Scheduler）**放 L3 侧车内部**，不新增进程 | tick 级事件在 Node 本地，跨进程会慢且脆；与决策 #5 一致 |
+| 35 | **记录 / 唤醒 / 截图是三个不同门槛**；低分事件只落盘，不叫醒 L1，更不截图 | 否则变成「每个变化都播报」的刷屏机，还会烧 token |
+| 36 | 编排层只提供候选与评分，**L1 保留最终意愿**（含 ignore / no_action）；行动仍走 intention → L2 → L3 | 编排层不能替她做价值判断，也不能变成自动派任务器 |
+| 37 | 先报候选、不靠方块 ID 断言语义（不写「这是爱心/房子」）；语义交给视觉或 L1 | 结构检测便宜可靠，语义判断容易假积极 |
 
 ---
 
