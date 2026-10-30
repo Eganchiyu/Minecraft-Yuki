@@ -481,3 +481,35 @@ decision 与经历账本分开（决策 #44/#52）；planner 不在线也不丢�
 
 **当前状态**：P4.0 通过；P4.4/P5 代码与单测全绿，但**两端真机验收未过**；改动已提交。
 下一步：重跑 `bash scripts/p4-4-run.sh`，再做 P5.4；文档 PRD/HANDOFF 待验收后同步。
+
+## 2026-10-31 统一入服（完整形态加入任意服务器）
+
+**目标**：一套入口把 L1/L2/L3 + 胶囊 + 截图视觉接到「任意一台」服务器，而不只是本地 :25565。
+
+**新增/改动**
+- `scripts/world-join.sh`（新）：`world-join.sh <host:port> [世界分区] [--camera] [--no-snapshot]`。
+  复制 `configs/local.json` 到 `/tmp/yuki-world/local.json` 覆盖 `mc.host/port/world`；起 sidecar → planner；
+  `--camera` 才开 `snapshot.enabled` + `attention.snapshot_enabled`，并起 Xvfb :98 客户端（`YukiCam`）+ F1 + 相机跟随。
+- `yuki-bot/scripts/mc-camera-follow.js`：新增 `--mode=spectate`（别人家的服，YukiCam 有 OP）——
+  用 XTest 在虚拟屏客户端里敲一次 `/spectate <sidecar username>`，重连/换目标/`deaths` 变化/日志报错才重敲；
+  原 `--mode=tp`（自建服控制台 FIFO，200ms 一条 `/tp`）原样保留。
+  判据修正：客户端的「joined the game」只广播给别人、不进自己日志，改用「最后一次 Connecting to 之后没有
+  Connection lost/Disconnected」判断在线。
+- `scripts/mc-keys.py`：原来只能打字母数字空格，`/` 会 `XStringToKeysym` 返回 0 直接退出。补了标点映射
+  与 Shift 组合（`_ : ' ! @ #` 等），大写字母按 Shift+小写。
+- `scripts/world-down.sh`：一并停 `camera` 与虚拟屏客户端（`mc-client-headless.sh --stop`）。
+- `docs/统一入服手册.md`（新）：对端前置（26.1/离线/白名单/YukiCam OP/皮肤插件）、两种跟随模式、排错；
+  同时记下为什么不用「单账号双连接 / prismarine-viewer / SpectatorPlus / 服务端模组」。
+
+**验证（本机 server-test :25566 当作"远端"）**
+- 端到端：sidecar 让 `Yuki-chan` 进服 ready、planner :8791 ok；`YukiCam` 客户端进服后
+  `camera.log` 出现「已让 YukiCam 旁观 Yuki-chan」。
+- 两张截图（`mc-shot.sh`）在 30 秒内画面完全不同（夜天地形 → 水面/白桦墙）⇒ spectate 跟随真的在跟她的视角；
+  F1 生效，无 HUD。
+- 字符注入用 `xev` 逐键核对：`/`、`Y`(Shift)、`C`(Shift)、`_`(Shift)、数字 均正确。
+- 收尾 `world-down.sh` 端口全释放。
+
+**未做 / 已知限制**
+- 只在 127.0.0.1 上验过；公网延迟与对端白名单未验。
+- P4.4（胶囊→L1）真机验收仍未重跑；P5 截图在真实任务中未触发过一次真拍。
+- `spectate` 后若 YukiCam 自己死亡/被踢，脚本只在 `deaths` 变化或日志报错时重敲，未覆盖"客户端自己在旁观别的实体"。

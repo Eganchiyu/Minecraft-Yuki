@@ -31,6 +31,18 @@ XTST.XTestFakeKeyEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_int,
 
 KEYMAP = {
     " ": "space", "Escape": "Escape", "Return": "Return", "Tab": "Tab",
+    "/": "slash", ".": "period", "-": "minus", ",": "comma",
+    ";": "semicolon", "=": "equal", "[": "bracketleft", "]": "bracketright",
+    "\\": "backslash", "`": "grave",
+}
+
+# 这些符号在 X 键盘布局上和别的键共用键位，必须按住 Shift 才出得来
+SHIFTED_MAP = {
+    "_": "underscore", ":": "colon", "'": "apostrophe", "!": "exclam",
+    "@": "at", "#": "numbersign", "$": "dollar", "%": "percent",
+    "*": "asterisk", "+": "plus", "?": "question", "(": "parenleft",
+    ")": "parenright", "\"": "quotedbl", "&": "ampersand", "<": "less",
+    ">": "greater", "|": "bar", "~": "asciitilde", "^": "asciicircum",
 }
 
 
@@ -67,26 +79,39 @@ def find_client_window(display: str) -> int | None:
     return best
 
 
-def press(dpy, keysym_name: str) -> None:
+def press(dpy, keysym_name: str, shift: bool = False) -> None:
     keysym = X11.XStringToKeysym(keysym_name.encode())
     if not keysym:
         raise SystemExit(f"未知键名: {keysym_name}")
     code = X11.XKeysymToKeycode(dpy, keysym)
     if not code:
         return
+    shift_code = X11.XKeysymToKeycode(dpy, X11.XStringToKeysym(b"Shift_L"))
+    if shift:
+        XTST.XTestFakeKeyEvent(dpy, shift_code, 1, 0)
     XTST.XTestFakeKeyEvent(dpy, code, 1, 0)
     XTST.XTestFakeKeyEvent(dpy, code, 0, 0)
+    if shift:
+        XTST.XTestFakeKeyEvent(dpy, shift_code, 0, 0)
     X11.XFlush(dpy)
 
 
-def tap(dpy, keysym_name: str) -> None:
-    press(dpy, keysym_name)
+def tap(dpy, keysym_name: str, shift: bool = False) -> None:
+    press(dpy, keysym_name, shift)
     time.sleep(0.05)
 
 
 def type_text(dpy, text: str) -> None:
     for ch in text:
-        tap(dpy, KEYMAP.get(ch, ch))
+        if ch in KEYMAP:
+            tap(dpy, KEYMAP[ch])
+        elif ch in SHIFTED_MAP:
+            # 需要 Shift 才打得出来的符号（命令里常见的是 / 与 _ 与 :）
+            tap(dpy, SHIFTED_MAP[ch], shift=True)
+        elif ch.isupper():
+            tap(dpy, ch.lower(), shift=True)
+        else:
+            tap(dpy, ch)
 
 
 def main() -> None:

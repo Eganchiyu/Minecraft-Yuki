@@ -172,6 +172,17 @@ bash scripts/world-down.sh
 
 ```
 
+### 4. 加入别人的服务器（完整形态）
+
+不起本地服务端，只把三层进程指向对端；`--camera` 再给她一台虚拟屏里的"眼睛"（观战客户端）用于截图/视觉：
+
+```bash
+bash scripts/world-join.sh play.example.com:25565 myserver --camera   # 启动
+bash scripts/world-down.sh                                            # 停止
+```
+
+前置条件、两种相机跟随模式（`tp` / `spectate`）与排错见 [`docs/统一入服手册.md`](docs/统一入服手册.md)。
+
 ---
 
 ## 技术栈与设计约束
