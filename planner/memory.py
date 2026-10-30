@@ -277,6 +277,72 @@ class MemoryStore:
         picked.sort(key=lambda item: item["ts"])
         return picked
 
+    # ================= 注意力用的数值证据（P4.3） =================
+    def recall_scored(self, query: str, n: int = 5, now: float | None = None) -> list[dict]:
+        """给注意力模块的召回证据：只有数字，不做注入格式化（recall() 保持原样）。"""
+        return self.recall_scored_many([query], n=n, now=now)[0]
+
+    def recall_scored_many(
+        self, queries: list[str], n: int = 5, now: float | None = None
+    ) -> list[list[dict]]:
+        """批量版：一次编码所有候选 query，别让每条候选各跑一次模型。"""
+        n = max(1, int(n))
+        now = now if now is not None else time.time()
+        texts = [str(query or "").strip() for query in queries]
+        if not self._entries:
+            return [[] for _ in texts]
+
+        # 向量池宽进：所有 query 一次编码、一次查询
+        wide = max(self.pool, n * 6)
+        vector_pools = self._vector_pool_batch(texts, wide)
+
+        out: list[list[dict]] = []
+        for query, vector_hits in zip(texts, vector_pools):
+            keywords = self._keywords(query) if query else []
+            kw_sum = sum(weight for _, weight in keywords)
+            max_v = max(vector_hits.values(), default=0.0)
+            candidates: dict[str, dict] = {}
+
+            for entry_id, relevance in vector_hits.items():
+                entry = self._by_id(entry_id)
+                if entry is None:      # 索引里有、JSONL 里被 trim 掉了
+                    continue
+                candidates[entry_id] = {"entry": entry, "base": relevance, "keyword_hit": 0.0}
+
+            if keywords:
+                for entry in self._entries:
+                    entry_id = self._id_of(entry)
+                    if entry_id in candidates:
+                        continue
+                    coverage = _keyword_coverage(str(entry.get("text", "")), keywords, kw_sum)
+                    if coverage <= 0:
+                        continue
+                    base = (max_v or 0.6) * coverage
+                    candidates[entry_id] = {"entry": entry, "base": base, "keyword_hit": coverage}
+
+            scored: list[dict] = []
+            for entry_id, item in candidates.items():
+                text = str(item["entry"].get("text", ""))
+                hit_weight = sum(weight for word, weight in keywords if word in text)
+                relevance = min(1.0, max(0.0, _safe_float(item["base"], 0.0)))
+                keyword_hit = min(1.0, max(0.0, hit_weight / kw_sum)) if kw_sum > 0 else 0.0
+                keyword_boost = min(hit_weight * KEYWORD_RELATIVE_BOOST, KEYWORD_RELATIVE_BOOST_CAP) * relevance
+                kind_boost = KIND_BOOST.get(str(item["entry"].get("kind") or ""), 0.0) * relevance
+                decay = self._recency_decay(item["entry"], now=now)
+                scored.append(
+                    {
+                        "id": entry_id,
+                        "kind": item["entry"].get("kind") or "diary",
+                        "ts": int(item["entry"].get("ts") or 0),
+                        "relevance": round(relevance, 4),
+                        "keyword_hit": round(keyword_hit, 4),
+                        "score": round((relevance + keyword_boost + kind_boost) * decay, 4),
+                    }
+                )
+            scored.sort(key=lambda item: (item["score"], item["ts"]), reverse=True)
+            out.append(scored[:n])
+        return out
+
     def _format(self, entries: list[dict]) -> list[dict]:
         return [
             {
@@ -309,6 +375,16 @@ class MemoryStore:
         except Exception as exc:
             self._note(f"语义检索失败（{exc}），本轮走关键词")
             return {}
+
+    def _vector_pool_batch(self, queries: list[str], n: int) -> list[dict[str, float]]:
+        index = self._ensure_index()
+        if index is None or not index.ok:
+            return [{} for _ in queries]
+        try:
+            return index.query_batch(queries, n)
+        except Exception as exc:
+            self._note(f"语义检索失败（{exc}），本轮走关键词")
+            return [{} for _ in queries]
 
     def _recency_decay(self, entry: dict, now: float | None = None) -> float:
         ts = _safe_float(entry.get("ts"), 0.0)
@@ -416,17 +492,39 @@ class _VectorIndex:
             return False
 
     def query(self, text: str, n: int) -> dict[str, float]:
-        vector = self._encode([text])[0]
+        return self.query_batch([text], n)[0]
+
+    def query_batch(self, texts: list[str], n: int) -> list[dict[str, float]]:
+        """一批候选一次编码、一次查询：注意力每批要 recall 好几条，逐条编码太慢。"""
+        if not texts:
+            return []
+        vectors = self._encode_batch(texts)
         with self._lock:
             result = self._collection.query(
-                query_embeddings=[vector], n_results=max(1, int(n)), include=["distances"]
+                query_embeddings=vectors, n_results=max(1, int(n)), include=["distances"]
             )
-        ids = (result.get("ids") or [[]])[0]
-        distances = (result.get("distances") or [[]])[0]
-        return {entry_id: max(0.0, 1.0 - float(distance)) for entry_id, distance in zip(ids, distances)}
+        all_ids = result.get("ids") or []
+        all_distances = result.get("distances") or []
+        out: list[dict[str, float]] = []
+        for ids, distances in zip(all_ids, all_distances):
+            out.append(
+                {
+                    entry_id: max(0.0, 1.0 - float(distance))
+                    for entry_id, distance in zip(ids or [], distances or [])
+                }
+            )
+        while len(out) < len(texts):        # chroma 理论上不会少，但别让调用侧错位
+            out.append({})
+        return out
+
+    def encode_batch(self, texts: list[str]) -> list[list[float]]:
+        return self._encode_batch(texts)
 
     def _encode(self, texts: list[str]) -> list[list[float]]:
-        vectors = self._model.encode(texts)
+        return self._encode_batch(texts)
+
+    def _encode_batch(self, texts: list[str]) -> list[list[float]]:
+        vectors = self._model.encode(list(texts))
         return [list(map(float, vector)) for vector in vectors]
 
     @staticmethod

@@ -80,6 +80,8 @@ AUTONOMY = {
     "max_tokens": _int(_AUTONOMY.get("max_tokens"), 260),
     "rest_default_min": _int(_AUTONOMY.get("rest_default_min"), 10),
     "event_aggregate_s": _float(_AUTONOMY.get("event_aggregate_s"), 30.0),
+    # 忙时别把事件丢掉：最多留这么久，超时降级为「只记不唤醒」
+    "event_ttl_s": _float(_AUTONOMY.get("event_ttl_s"), 180.0),
     "urgent_severity": _int(_AUTONOMY.get("urgent_severity"), 7),
     "summary_after": _int(_AUTONOMY.get("summary_after"), 12),       # 超过就压成一条日记，保持上下文干净
     "max_say_chars": _int(_AUTONOMY.get("max_say_chars"), 120),      # 公屏一句话的上限
@@ -88,6 +90,28 @@ AUTONOMY = {
     "daily_self_calls": _int(_AUTONOMY.get("daily_self_calls"), 800),
     # 身体明明闲着却一直以为自己在干活，超过这么多秒就复位
     "stuck_after_s": _float(_AUTONOMY.get("stuck_after_s"), 20.0),
+}
+# P4.3 注意力（Shadow 第一轮）：只打分、只写 decision，不真唤醒、不真截图
+_ATT = _RAW.get("attention") or {}
+ATTENTION = {
+    "enabled": bool(_ATT.get("enabled", True)),
+    "batch_s": _float(_ATT.get("batch_s"), 60.0),                  # 打分按批，允许积压
+    "floor": _float(_ATT.get("floor"), 0.55),                       # A(c) 下限
+    "top_k": _int(_ATT.get("top_k"), 1),                            # 每批最多放行几条 wake
+    "wake_gap_s": _float(_ATT.get("wake_gap_s"), _AUTONOMY.get("proactive_say_min_gap_s", 120.0)),
+    "short_half_life_s": _float(_ATT.get("short_half_life_s"), 1800.0),   # 短期情景：30 分钟后减半
+    "max_fact_age_s": _float(_ATT.get("max_fact_age_s"), 12 * 3600.0),   # 太旧的事实不再打分
+    "max_batch": _int(_ATT.get("max_batch"), 200),
+    "recall_n": _int(_ATT.get("recall_n"), 5),
+    "weights": {
+        "novelty": _float((_ATT.get("weights") or {}).get("novelty"), 0.35),
+        "importance": _float((_ATT.get("weights") or {}).get("importance"), 0.35),
+        "interest": _float((_ATT.get("weights") or {}).get("interest"), 0.20),
+        "memory": _float((_ATT.get("weights") or {}).get("memory"), 0.10),
+        "interruption": _float((_ATT.get("weights") or {}).get("interruption"), 0.35),
+    },
+    # Snapshot 要等 P4.0 截图跟随肉眼验过才开；关着时只写 decision
+    "snapshot_enabled": bool(_ATT.get("snapshot_enabled", False)),
 }
 _TRACE = _RAW.get("trace") or {}
 # 请求/补全留痕：调 prompt 时看「上传了什么、模型回了什么」。默认开，按大小滚动。
@@ -102,6 +126,9 @@ MEMORY_PATH = STATE_DIR / "memory.jsonl"
 HISTORY_PATH = STATE_DIR / "history.json"
 MIND_STATE_PATH = STATE_DIR / "mind.json"
 VECTOR_PATH = STATE_DIR / "chroma"
+# P4.3：侧车写事实行、planner 写 decision，两个文件并排、按 candidate_id join
+ATTENTION_FACTS_PATH = STATE_DIR / "experiences.jsonl"
+DECISIONS_PATH = STATE_DIR / "decisions.jsonl"
 # 世界知识表：哪个箱子有什么、在哪（由 L3 每次开容器上报，按坐标覆盖）
 # 目前先关掉：places_enabled=false 时不记录也不注入，代码留着随时开
 _NOTES = _RAW.get("notes") or {}

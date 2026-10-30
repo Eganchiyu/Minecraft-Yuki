@@ -76,6 +76,21 @@ async def handle_state(request: web.Request) -> web.Response:
     return web.json_response(mind.snapshot())
 
 
+async def handle_decisions(request: web.Request) -> web.Response:
+    """P4.3 注意力的 decision 流：只读，用来核对「该 wake 的有没有 wake」。"""
+    try:
+        limit = max(1, min(200, int(request.query.get("n") or 20)))
+    except (TypeError, ValueError):
+        limit = 20
+    path = config.DECISIONS_PATH
+    if not path.exists():
+        return web.json_response({"entries": [], "total": 0, "attention": mind.attention.snapshot()})
+    rows = mind.attention._read_rows(path)
+    return web.json_response(
+        {"entries": rows[-limit:], "total": len(rows), "attention": mind.attention.snapshot()}
+    )
+
+
 async def handle_chat(request: web.Request) -> web.Response:
     body = await request.json()
     player = str(body.get("player") or "").strip()[:32]
@@ -195,6 +210,7 @@ def build_app() -> web.Application:
             web.get("/health", handle_health),
             web.get("/stats", handle_stats),
             web.get("/state", handle_state),
+            web.get("/decisions", handle_decisions),
             web.get("/trace", handle_trace),
             web.post("/chat", handle_chat),
             web.post("/plan", handle_plan),

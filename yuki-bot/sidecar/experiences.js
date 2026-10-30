@@ -24,9 +24,14 @@ function makeExperience (input = {}, now = Date.now()) {
     subject: String(input.subject || ''),
     // summary：给 L1 的短人话；原始细节放 detail，永不直接进 prompt。
     summary: String(input.summary || ''),
-    salience: Number.isFinite(input.salience) ? Number(input.salience) : 0,
+    // P4.3：事实行显式 salience=null，表示「还没打分」。打分结果写 decisions.jsonl。
+    salience: input.salience === null
+      ? null
+      : (Number.isFinite(input.salience) ? Number(input.salience) : 0),
     visual: input.visual || 'none',
     detail: input.detail || {},
+    // features：注意力要用的数值证据（seen.count / distance / block_count …）
+    features: input.features || {},
     reaction: input.reaction || null,
     action: input.action || null,
     outcome: input.outcome || null,
@@ -111,6 +116,39 @@ class ExperienceStore {
     const exp = makeExperience({ ...input, at: input.at || now }, now)
     const decision = acceptExperience(this.items, exp, { dedupeWindowMs: this.dedupeWindowMs })
     if (!decision.added) return { added: false, reason: decision.reason, id: decision.id }
+    this.items.push(exp)
+    if (this.items.length > this.maxEntries) {
+      this.items = pruneExperiences(this.items, this, now)
+      this._rewrite()
+    } else {
+      fs.appendFileSync(this.file, JSON.stringify(exp) + '\n')
+    }
+    return { added: true, item: exp }
+  }
+
+  /**
+   * P4.3 事实行：观察者候选原样落盘，salience=null、visual='none'。
+   * 不走 (kind, subject) 去重：候选 id 就是稳定 id，同一处继续搭会以同一 id 再 append
+   * 一行更新后的规模，读侧取「同 id 最后一行」。这样账本保持 append-only，不回头改历史。
+   */
+  addFact (candidate, now = Date.now()) {
+    this._ensure()
+    const exp = makeExperience({
+      id: candidate.id,
+      at: candidate.at || now,
+      kind: candidate.kind,
+      subject: candidate.subject,
+      summary: candidate.summary,
+      salience: null,
+      visual: 'none',
+      detail: {
+        ...(candidate.detail || {}),
+        location: candidate.location || null,
+        confidence: candidate.confidence
+      },
+      features: candidate.features || {},
+      source: 'observer'
+    }, now)
     this.items.push(exp)
     if (this.items.length > this.maxEntries) {
       this.items = pruneExperiences(this.items, this, now)

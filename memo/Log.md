@@ -418,3 +418,33 @@ SSE `experience_candidate`。候选**只进内存**，账本留给 P4.3 打分�
 而 planner 侧 `event_aggregate_s=30` 与 `idle_gap_s=45` 是两条独立通道，叠加后是每 30–45 秒一次。
 定：wake 全局最小间隔 120 秒，idle tick 共用同一闸门，超额候选只记不唤醒；打分按 60 秒一批。
 补充：`landmark_arrival` 的冷却要改成按区域，否则候选池被「路过」灌满（不唤醒但稀释召回）。
+
+## 2026-10-31 P4.3 记忆辅助注意力（Shadow）落地
+
+**数据流**：观察者候选 → 侧车立即写事实行（`salience:null`、`visual:'none'`、`features.seen`）→
+planner `attention.py` 每 60 秒一批取未决事实 → 批量 `recall_scored` → 算分 → 追加 `decisions.jsonl`。
+decision 与经历账本分开（决策 #44/#52）；planner 不在线也不丢候选。
+
+**改了哪些文件**
+- `sidecar/observer.js`：`SeenTable` v2（`count/last_at/last_subject`，旧 v1 自动迁移）；候选统一补 features/novelty；
+  `landmark_arrival` 的 subject 改成「维度+生物群系」，坐标进 detail，冷却按区域。
+- `sidecar/experiences.js`：`addFact()`（同 candidate id 可追加，读侧取最后一行）；`salience:null` 原样保留。
+- `sidecar/index.js`：候选先落事实行再发 SSE。
+- `planner/memory.py`：`recall_scored()` / `recall_scored_many()`（纯数值证据）、`_VectorIndex.query_batch/encode_batch`。
+- `planner/attention.py`（新）：纯函数打分 + `AttentionEngine`；wake = floor + top-k + 全局 120 秒闸门；
+  interest 用 Beta(1,1) 的 mean−1σ 下界（第一轮无证据，只读）。
+- `planner/mind.py`：`_tick` 接注意力；`_flush_events` 忙时保留 + TTL 180 秒降级为记录（决策 #49）；
+  `_mark_wake` 统一记录主动 turn，`_schedule_idle` 与 idle 前置检查共用 120 秒闸门（决策 #50）。
+- `planner/app.py`：`GET /decisions`，`/state`、`/stats` 带 `attention`。
+- 验收：`scripts/p4-3-run.sh`（隔离实验场 :25566 + 独立 `MC_WORLD`）、`planner/tests/p4_3_live.py`；
+  `p4-test.js` 补事实行断言，修了收尾取错坐标嵌套层导致工作台堆积的问题。
+
+**验证**
+- `test_attention.py` 65/65、`test_mind_events.py` 17/17、`observer-test.js` 85/85、`experience-test.js` 30/30；
+  记忆 43/43、分域 44/44 不回归（`test_p2.py` 仍是既有的 30/31）。
+- 真机 `bash scripts/p4-3-run.sh`：侧车 23/23、注意力 18/18。
+  实测 decision：羊第一次见 `wake A≈0.59`；18 块建造 `A≈0.69` 被 120 秒闸门压成 `record`；
+  任务完成在她忙时 `A≈0.37` 只记录；无 snapshot。
+
+**当前状态**：P4.3 Shadow 完成，P4.4（Capsule → L1）未开始。P4.0 截图跟随仍等机主肉眼验。
+未做：兴趣回写/探索额度、Miss Rate 标注集、Snapshot 真发、噪声地形下的阈值调参。

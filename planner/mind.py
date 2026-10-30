@@ -16,6 +16,7 @@ import re
 import time
 from pathlib import Path
 
+import attention
 import config
 import prompts
 from budget import BudgetExceeded
@@ -58,6 +59,7 @@ DEFAULT_STATE = {
     "next_tick_at": 0.0,
     "idle_rounds": 0,
     "last_say_at": 0.0,
+    "last_wake_at": 0.0,      # 上一次主动 turn；idle tick 与注意力共用这个闸门
 }
 
 
@@ -96,6 +98,10 @@ class Mind:
             half_life_days=config.MEMORY["half_life_days"],
             recency_floor=config.MEMORY["recency_floor"],
         )
+        # P4.3：注意力只读事实行、只写 decision（Shadow：不真唤醒、不真截图）
+        self.attention = attention.AttentionEngine(
+            self.memory, config.ATTENTION_FACTS_PATH, config.DECISIONS_PATH, config.ATTENTION
+        )
         self.notes = NoteStore(config.NOTES_PATH)
         self.history_store = HistoryStore(config.HISTORY_PATH, config.MEMORY["history_max"])
         self.history: list[dict] = self.history_store.load()
@@ -115,6 +121,9 @@ class Mind:
         self._last_event_at: dict[str, float] = {}
         self._daily = {"date": time.strftime("%Y-%m-%d"), "self_calls": 0}
         self._idle_since = 0.0
+        # 唤醒闸门：最后一个「主动开口/自主 turn」的时间，idle tick 和注意力共用
+        self._last_wake_at = float(self.state.get("last_wake_at") or 0.0)
+        self._attention_result: dict = {}
 
     # ================= 生命周期 =================
     async def start(self) -> None:
@@ -238,6 +247,8 @@ class Mind:
             "daily": dict(self._daily),
             "places": self.notes.count(),
             "metrics": dict(self.metrics),
+            "attention": self.attention.snapshot(),
+            "last_wake_at": self._last_wake_at,
             "chains": len(self.chains),
             "last_budget": self.last_budget,
             "recent": self.chain_log[-5:],
@@ -249,6 +260,7 @@ class Mind:
     # ================= 一轮对话 =================
     async def _turn(self, user_text: str, origin: str, priority: int, kind: str, allow_tools: bool = True) -> dict:
         """一次模型调用 = 一句回话，或一个 intention，或两者都有。"""
+        self._mark_wake(time.time())
         state, stale = await self.sidecar.state()
         if state:
             self.last_state = state
@@ -471,6 +483,8 @@ class Mind:
         if state:
             self.last_state = state
         await self._flush_events(now)
+        # 注意力按批打分：忙的时候也照常记（只写 decision，不唤醒）
+        self._attention_result = await self.attention.tick(self._attention_context(state), now)
         if self.state.get("current"):
             self._check_stuck(state, now)
             return
@@ -482,6 +496,10 @@ class Mind:
             self.state["next_tick_at"] = now + 30
             return
         if self._lock.locked():
+            return
+        if not self._wake_gate_open(now):
+            # 刚有过主动 turn：idle tick 让路，别和注意力/事件两条通道叠加成刷屏
+            self.state["next_tick_at"] = self._last_wake_at + self._wake_gap_s()
             return
         async with self._lock:
             if self.state.get("current") or time.time() < float(self.state.get("next_tick_at") or 0):
@@ -496,17 +514,33 @@ class Mind:
             log.info("tick_done", say=result.get("say", "")[:40], intention=result.get("intention", "")[:40])
 
     async def _flush_events(self, now: float) -> None:
+        """聚合窗口到了的事件。
+
+        P4.3（决策 #49）：忙的时候**不丢**，留在缓冲里等空闲；超过 TTL 才降级成
+        「只记进记忆、不唤醒」。以前是先摘掉再判忙，任务期间到达的事件被静默吞掉。
+        """
         if not self._event_buffer:
             return
         window = max(5, int(config.AUTONOMY["event_aggregate_s"]))
+        ttl = max(window, float(config.AUTONOMY.get("event_ttl_s") or 180.0))
         due = [item for item in self._event_buffer if now - item[0] >= window]
         if not due:
             return
-        self._event_buffer = [item for item in self._event_buffer if now - item[0] < window]
+        expired = [item for item in due if now - item[0] > ttl]
+        if expired:
+            self._event_buffer = [item for item in self._event_buffer if item not in expired]
+            for _, text in expired:
+                self.memory.add("event", text)
+            log.info("event_expired", count=len(expired))
+        due = [item for item in due if now - item[0] <= ttl]
+        if not due:
+            return
         if self._lock.locked() or self.state.get("current"):
             return
+        self._event_buffer = [item for item in self._event_buffer if item not in due]
         text = "；".join(item[1] for item in due)[:300]
         async with self._lock:
+            self._mark_wake(now)
             await self._turn(f"（刚才陆续发生）{text}", origin="self_play", priority=4, kind="event")
 
     def _parse_command(self, text: str) -> dict | None:
@@ -569,8 +603,35 @@ class Mind:
     def _schedule_idle(self) -> None:
         gap = float(config.AUTONOMY["idle_gap_s"]) * (1.0 + min(3.0, self.state.get("idle_rounds", 0) * 0.5))
         gap = min(gap, float(config.AUTONOMY["max_idle_gap_s"]))
-        self.state["next_tick_at"] = time.time() + gap
+        now = time.time()
+        self.state["next_tick_at"] = max(now + gap, self._last_wake_at + self._wake_gap_s())
         self.state["idle_rounds"] = int(self.state.get("idle_rounds", 0)) + 1
+
+    def _wake_gap_s(self) -> float:
+        return max(
+            float(config.ATTENTION.get("wake_gap_s") or 120.0),
+            float(config.AUTONOMY.get("proactive_say_min_gap_s") or 120.0),
+        )
+
+    def _wake_gate_open(self, now: float) -> bool:
+        return now - self._last_wake_at >= self._wake_gap_s()
+
+    def _mark_wake(self, now: float) -> None:
+        """任何主动 turn（事件/idle/被叫）都算一次打扰，闸门一起后移。"""
+        self._last_wake_at = float(now)
+        self.state["last_wake_at"] = float(now)
+        self._save_state()
+
+    def _attention_context(self, state: dict | None = None) -> dict:
+        """给注意力看「此刻她忙不忙、睡没睡、刚说过话没」。"""
+        state = state if isinstance(state, dict) else self.last_state
+        return {
+            "busy": bool(self.state.get("current")),
+            "mode": self.state.get("mode"),
+            "last_say_at": float(self.state.get("last_say_at") or 0.0),
+            "pos": (state or {}).get("pos"),
+            "health": (state or {}).get("health"),
+        }
 
     def _dispatch_failure_message(self, intention_text: str, error: str) -> str:
         """把 L2/L3 的失败翻成她听得懂的人话；功能缺失要明说是「主人还没做」。"""

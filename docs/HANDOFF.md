@@ -127,9 +127,9 @@ free -g | head -2
 
 ---
 
-## 2. 当前状态（2026-10-30 收工，P4.2 后）
+## 2. 当前状态（2026-10-31 收工，P4.3 Shadow 后）
 
-**一句话**：P0–P3 全通，**P4.1 经历账本 + P4.2 世界观察/事件聚合已落地**；世界当前**全停**（25565/25566/8790/8791 空）。下一步是 **P4.3 Memory-Guided Adaptive Attention**（记忆辅助的自适应注意力：连续新颖度 + 兴趣后验 + 候选排序）。**规格已定、代码未动**，见 4.6。P4.0 观战截图跟随仍等机主肉眼确认，不阻塞。
+**一句话**：P0–P3 全通，**P4.1 经历账本 + P4.2 世界观察 + P4.3 记忆辅助注意力（Shadow）已落地**；世界当前**全停**（25565/25566/8790/8791 空）。下一步是 **P4.4 Capsule → L1**（把候选压成人话 + 有限选项，接回现有事件唤醒路径）；P4.0 观战截图跟随仍等机主肉眼确认，不阻塞，Snapshot 也仍然只写 decision。
 
 **已完成（按时间）**
 
@@ -141,7 +141,8 @@ free -g | head -2
 - `guardian.js` 四态机 idle/defend/flee/recover + `mlg` 自救；`reflex-test.js` 29/29、`mlg-test.js` 18/18
 - 客户端换肤：CustomSkinLoader 本地皮肤 `Yuki-chan.png`（只对机主客户端可见），**尚未肉眼验收**
 - P4.1 经历账本：`sidecar/experiences.js` — JSONL 真相 + `(kind, subject)` 时间窗去重 + TTL/条数裁剪 + 世界分区 `experiences.jsonl`；24 项单测
-- P4.2 观察者/聚合器：`sidecar/observer.js` — `entitySpawn`→`new_entity`、`blockUpdate` 聚类→`construction_candidate`（3 秒静默、最少 3 块、8 格分格 subject、同一处继续搭算合并）、生物群系/64 格网格变化→`landmark_arrival`、`task_done`→`task_milestone`；`seen.json` 记「见过的东西」；`GET /candidates`、`/state.observer`、SSE `experience_candidate`；70 项单测 + 真机验收 `scripts/p4-run.sh` 18/18
+- P4.2 观察者/聚合器：`sidecar/observer.js` — `entitySpawn`→`new_entity`、`blockUpdate` 聚类→`construction_candidate`（3 秒静默、最少 3 块、8 格分格 subject、同一处继续搭算合并）、生物群系/64 格网格变化→`landmark_arrival`、`task_done`→`task_milestone`；`seen.json` 记「见过的东西」；`GET /candidates`、`/state.observer`、SSE `experience_candidate`；85 项单测 + 真机验收 `scripts/p4-3-run.sh` 23/23
+- P4.3 记忆辅助注意力（Shadow）：`sidecar` 候选立即写事实行（`salience:null`、`features.seen`、同 id 可追加）→ `planner/attention.py` 60 秒一批算 novelty（短/长）/ interest（后验下界）/ importance / memory 支持 / 打断代价 → `decisions.jsonl`（record / wake / snapshot，`shadow:true`）；wake 全局 120 秒闸门 + 批内 top-k；`seen` 升 v2（`count/last_at/last_subject`）且地标按区域冷却；`/decisions`、`/state.attention`；单测 65 项 + 接线 17 项，真机 `scripts/p4-3-run.sh` 侧车 23/23 + 注意力 18/18
 
 **未验 / 已知欠账**
 
@@ -149,8 +150,10 @@ free -g | head -2
 - `mlg` 真实坠落未验（触发 3.5 格、等水 800ms、等落地 3s 均为估算）
 - pvp 实战（走位、举盾、苦力怕）未验
 - `test_p2.py` 30 过 1 挂（既有「超过 5 步」用例与 `MAX_STEPS=15` 不符，与功能无关）
-- P4.2 只在主服出生点空场地验过：矿洞、密集村庄、成群动物这些噪声大的地形，阈值（32 格、3 块、3 秒）还没调过
-- P4.2 候选**只进内存**（`/candidates` 留最近 50 条），还没写进 `experiences.jsonl`——落盘与打分一起在 P4.3 接
+- P4.3 只在「出生点附近、单只羊 + 一处 18 块建造 + 一次任务完成」这个干净场景验过；矿洞/村庄/成群动物下的打分分布还没看
+- P4.3 的兴趣证据**只读不写**：`interest` 现在每条都是同一个先验下界（≈0.21），`reason` 里写 `evidence:none(shadow)`；回写与探索额度留到 P6
+- P4.3 的 wake 是**虚拟的**：decision 记了 `wake`，但没有真的叫醒 L1、没有截图；idle tick 的 120 秒闸门已经生效（decision #50），别把「decision=wake」当成她真的说话了
+- 同 id 追加的事实行：一旦该 id 已经写过 decision，后续合并更新不会再重算（append-only 的代价）；如果以后需要，另开 revision 表
 - 常驻世界默认停；要起用 `bash scripts/world-up.sh`
 
 ---
@@ -164,7 +167,7 @@ free -g | head -2
 1. [ ] **P4.0 截图链路人工验证**：起服 + sidecar + spectator 客户端，让 Yuki 移动/转头，确认 `ffmpeg x11grab` 抓到的画面是否跟随；结论写回 PRD/HANDOFF。不同步则截图限定人工触发，不阻塞 P4
 2. [x] **P4.1 经历数据结构与落盘**：`Experience` / `ExperienceCapsule`、去重键、世界分区、过期与截断；纯函数单测（序列化/去重/重启恢复）
 3. [x] **P4.2 World Observer + Event Grouper**：先做 `new_entity`（初遇实体）、`block_change_cluster`（短静默窗口 + 空间相邻的人工方块变化）、`landmark_arrival`、`task_milestone`；不做建筑语义断言
-4. [ ] **P4.3 Memory-Guided Adaptive Attention**（下一步，规格见 4.6，**第一轮只做 Shadow**）：不再问「够不够分数线」，而是「结合她的记忆、兴趣和此刻状态，这事值不值得注意」。连续新颖度（短期情景 + 长期熟悉，见过≠不感兴趣）+ 记忆召回证据 + 兴趣后验 + 窗口内排序；Record / Wake / Snapshot 三档仍然分开，但 Wake 是「下限 + top-k」而不是单阈值。不真唤醒、不真截图，只写 decision
+4. [x] **P4.3 Memory-Guided Adaptive Attention**（Shadow 已落地，见 4.6）：sidecar 写事实行 → planner 批量算分 → 写 decision；Record / Wake / Snapshot 三档分开，Wake = 下限 + 批内 top-k + 全局 120 秒闸门。**不真唤醒、不真截图**，兴趣只读不写
 5. [ ] **P4.4 Capsule → L1**：压成一两句人话 + 有限选项（含 ignore/no_action），复用现有事件唤醒路径；行动仍走 intention → L2 → L3；经历写入记忆
 6. [ ] **P5（后续）**：Snapshot Scheduler（开关/间隔/配额/稳定窗口）、Vision Adapter、主动观察、爱心端到端验收
 7. [ ] **P6（后续）**：按真实使用反馈决定兴趣权重、心愿、mood、锚点；回归与长跑
@@ -230,6 +233,11 @@ free -g | head -2
 | 48 | Voyager 的 Automatic Curriculum（心愿推荐）**不进 P4.3**，单独排期 | 注意力是「筛已有事件」，课程是「生成新目标」，验收标准正交，混做会让 P4.3 收不了口 |
 | 49 | `_flush_events` 的「忙时丢事件」要在 P4.3 前修：due 项改为保留 + TTL，超时降级为 record | 现在先把 due 从缓冲里摘掉再判忙，任务期间到达的候选被静默丢弃，是 Miss Rate 的主要来源 |
 | 50 | **打扰上限：wake 之间全局最小 120 秒**；`idle tick` 纳入同一闸门（最近一次唤醒后，自主 turn 至少后移 120 秒）；闸门管 Wake 不管 Record | 机主要求最多每 1–2 分钟触发一次；不做全局闸门时，`event_aggregate_s=30` + `idle_gap_s=45` 两个通道叠加会到每 30–45 秒一次 |
+| 51 | `seen` 升到 v2：`key → {count,last_at,last_subject}`；key 从类级 `entity:sheep` 改成 `<kind>:<subject>`，旧 v1 文件启动时迁移一次 | 只存时间戳无法表达「见过一次」和「见过一百次」；类级 key 让第二只羊的 novelty 恒为 0。迁移是为了升级后不把老熟人集体当初遇 |
+| 52 | 事实行用 **candidate id 作经历 id**，同一 id 允许追加多行（合并更新的块数），读侧取最后一行；decision 另写 `decisions.jsonl` 按 `candidate_id` join | 侧车 append-only、不回头改历史；planner 离线也不丢候选。`ExperienceStore` 的内存列表会吃掉别的进程追加的行，所以 decision 绝不复用这个文件（决策 #44） |
+| 53 | `landmark_arrival` 的 subject 只按「维度 + 生物群系」，64 格网格放进 `detail.cell`，冷却用独立的 `landmarkCooldownMs` | 冷却按格子等于没有冷却：跑图每跨一格就是新 subject，会把候选池灌满；区域冷却之后「路过」才真的只记一条 |
+| 54 | 注意力按 **60 秒一批**打分，允许积压；Wake = `A ≥ floor` + 批内 top-k + 全局 120 秒闸门；忙/睡/刚说过话计入打断代价 | 不调模型的批处理能承受积压，也避免每条候选各调一次 embedding；打断代价让「她正忙」自动降级为 record |
+| 55 | 第一轮 `interest` 只读：纯函数实现了 Beta(1,1) 的 mean−1σ 下界，但没有任何回写，所有候选拿同一个先验；Snapshot 开关默认关（`snapshot_enabled=false`） | 没有真实分布就训练兴趣模型只会自我强化（决策 #45/#47）；Snapshot 要等 P4.0 截图跟随肉眼验过（决策 #35） |
 
 ---
 
@@ -260,7 +268,7 @@ planner/state/worlds/<world>/          # 一个世界一个目录，world 来自
 
 ---
 
-## 4.6 P4.3 规格：Memory-Guided Adaptive Attention（Shadow 第一轮，未落地）
+## 4.6 P4.3 规格：Memory-Guided Adaptive Attention（Shadow 第一轮，已落地）
 
 **判断式**：不再问「这条候选够不够分数线」，而是问「结合她过去的经历、当前的兴趣和此刻的状态，这件事值不值得让她注意」。
 
@@ -302,7 +310,7 @@ observer 候选（事实不变）
 - 忙（`current` 非空 / 锁被占）时进队列并带 TTL，空闲后最多补发一条；这与决策 #49 一起改。
 - 配套：`landmark_arrival` 的 3 分钟冷却现在是**按格子**（subject 含 64 格坐标），跑图时会连续放行；要改成按区域/生物群系，否则候选池会被「路过」灌满（只是不再全部唤醒，但账本和召回会被稀释）。
 
-### 需要新增的最小接口
+### 需要新增的最小接口（已实现）
 
 | 位置 | 接口 | 说明 |
 |---|---|---|
@@ -315,6 +323,24 @@ observer 候选（事实不变）
 ### 反馈回路（第一轮只读不写）
 
 兴趣证据只能来自她的**主动行为**：`dispatch` 了与候选对象相关的 intention、`chain` 的终态、主动说「喜欢/不想」。无反应、被玩家叫走、任务抢占 → **不更新**。第一轮**不训练、不回写兴趣模型**，只把「本该记什么证据」写进 decision 的 `reason`，等分布稳定再打开回写。
+
+### 4.6.1 落地情况（2026-10-31）
+
+**数据流（已通）**：`observer` 候选 → `experiences.addFact()` 立即追加事实行（`salience:null`、`visual:'none'`、`features.seen`）→ `AttentionEngine.tick()` 每 60 秒取未决事实 → `memory.recall_scored_many()` 批量召回 → `select_batch()` → 追加 `decisions.jsonl`。全程不碰 `memory.jsonl` 的注入路径。
+
+**关键实现**
+- `sidecar/observer.js`：`SeenTable` v2（`key → {count,last_at,last_subject}`，旧 v1 文件自动迁移，旧类级 key `entity:sheep` → `new_entity:mob:sheep`）；候选统一补 `features.seen`（**这次之前**的次数）与 `novelty`；`landmark_arrival` 的 subject 只留 `area:<dim>:<biome>`，64 格坐标进 `detail.cell`，并单独用 `landmarkCooldownMs`（默认 3 分钟）冷却，跑图跨格不再连续放行。
+- `sidecar/experiences.js`：新增 `addFact()`，绕开 `(kind,subject)` 去重，同一 candidate id 可以追加多行（合并更新），读侧取最后一行；`makeExperience` 保留显式 `salience:null`。
+- `planner/memory.py`：新增 `recall_scored()` / `recall_scored_many()`（只返回 `id/kind/ts/relevance/keyword_hit/score`，不格式化注入），`_VectorIndex.query_batch()` / `encode_batch()` 一次编码整批；`recall()` 原样未动。
+- `planner/attention.py`：纯函数（`candidate_text` / `short_term_novelty` / `long_term_novelty` / `interest_posterior` / `importance_score` / `visual_need` / `interruption_cost` / `select_batch`）+ `AttentionEngine`（读写 JSONL、批量间隔、append-only）。`interest` 用 Beta(1,1) 的 mean−1σ 下界，第一轮无证据 → 约 0.21，`reason` 记 `evidence:none(shadow)`。
+- `planner/mind.py`：`_tick` 每拍调注意力（忙时也记）；`_flush_events` 改为「忙时保留 + TTL 180 秒后降级进记忆」（决策 #49）；`_mark_wake` 统一记录主动 turn，`_schedule_idle` 与 idle 前置检查都受 `wake_gap_s`（≥120 秒）约束（决策 #50）。
+- `planner/app.py`：`GET /decisions?n=` 返回 decision 尾部 + 注意力快照；`/state`、`/stats` 带 `attention`。
+
+**验收数字**
+- `planner/tests/test_attention.py` 65/65：证据单调性、下界、排序/闸门/top-k、append-only、同 id 取最后一行、过期事实、批量间隔、坏行跳过、`encode_batch` 对齐。
+- `planner/tests/test_mind_events.py` 17/17：忙时不丢 due、TTL 降级、空闲补发一条、idle 120 秒闸门、`_tick` 真接线且 Shadow 不调模型。
+- `yuki-bot/scripts/observer-test.js` 85/85、`experience-test.js` 30/30：seen v2/迁移、候选 features、地标区域冷却、事实行追加。
+- 真机 `bash scripts/p4-3-run.sh`：侧车 23/23（含事实行落盘/`salience:null`/features），注意力 18/18（事实→decision 全覆盖、字段齐全、`shadow:true`、wake 间隔 ≥120 秒、无 snapshot）。示例：羊 `wake A=0.59`，18 块建造 `A≈0.69` 但被 120 秒闸门压成 `record`，任务里程碑在她忙时 `A≈0.37` 只记录。
 
 ### 遗留风险（写进日志就能看见）
 
@@ -365,6 +391,8 @@ observer 候选（事实不变）
 36. **控制台 `/give` 的目标名是 `configs/local.json` 的 `mc.username`（本机是 `Yuki-chan`，不是 `Yuki`）**：写错不报错，只是物品没到手，技能侧只看到 `item_not_in_inventory`。`/state` 里的 `username` 就是真实登录名。
 37. **`/setblock x y z block keep` 只在空气处生效**：造「玩家搭方块」场景时用它，不会改动机主地形里的原有方块；被占用的格子会静默跳过，所以断言块数要留区间而不是死等 18。
 38. **1.20.2 起 `bot.on('entitySpawn')` 也包含玩家实体**：不按 `username` / `type==='player'` 过滤，「玩家出现」会被当成初遇实体；道具、经验球、箭分别是 `other` / `projectile`，盔甲架是 `living`，都不该进候选。
+39. **验收脚本自己的清理也会取错嵌套层**：`task_done.detail.results[i].detail.at` 才是放下的坐标，写成 `results[i].at` 就一直静默不清理。反复跑 P4.2 验收后，出生点唯一能放工作台的格子被历次测试的工作台占满，`place` 报 `no_place_spot`，看起来像技能坏了（实际是场地脏了）。清理已知坐标时记得先 `/forceload add <x> <z>`，否则 `setblock` 只回一行 `That position is not loaded`。
+40. **`MC_WORLD` 只切「侧车与 planner 的 state 目录」，不切服务端世界**：P4.3 验收把两层都隔开——`MC_PORT=25566` 用 `server-test/` 的 creative 实验场，`MC_WORLD=p4-3-test` 隔离账本，主服世界和主服记忆都不碰。反过来，若在 `autonomy.state_dir` 自定义了基础目录，侧车的 `experiences.jsonl` 路径不会跟着变——两边必须手动对齐。
 ---
 
 ## 6. 文件地图
@@ -383,6 +411,7 @@ observer 候选（事实不变）
 │   ├── p1-run.sh          # P1 一键验收：起服（带控制台 FIFO）-> 侧车 -> p1-test.js -> 全停
 │   ├── p2-run.sh          # P2 一键验收：单测 + 起服/planner/侧车 -> p2-test.js -> 全停
 │   ├── p4-run.sh          # P4.2 一键验收：起服（控制台 FIFO）+ 侧车 -> p4-test.js -> 全停
+│   ├── p4-3-run.sh        # P4.3 一键验收：起服 + 侧车 + planner（注意力 Shadow）-> p4-test.js + p4_3_live.py
 │   ├── world-up.sh        # 常驻世界：主服 + planner + 侧车（PID 在 /tmp/yuki-world/）
 │   └── world-down.sh      # 优雅停掉常驻世界
 ├── planner/               # L1 人格 + L2 规划（Python 3.11 + aiohttp，:8791）
@@ -394,11 +423,15 @@ observer 候选（事实不变）
 │   ├── prompts.py         # 人设 + 规划 + 重规划 + 方案 prompt、status_block
 │   ├── schema.py          # 步骤与方案硬校验（白名单 + 参数范围）
 │   ├── mind.py            # L1 心智：聊天 + intention 工具 + 自主节拍 + 记忆注入
-│   ├── memory.py          # 世界记忆：JSONL 真相 + 双池召回（向量 + 关键词）+ 时间衰减
+│   ├── attention.py       # P4.3 记忆辅助注意力：事实行 -> 打分 -> decisions.jsonl（Shadow）
+│   ├── memory.py          # 世界记忆：JSONL 真相 + 双池召回（向量 + 关键词）+ 时间衰减 + recall_scored
 │   ├── history.py         # 对话持久化（原子替换，重启接话）
 │   ├── notes.py           # 箱子表（按坐标 upsert，默认关）
 │   ├── tests/test_p2.py   # P2 单测（30 项）
 │   ├── tests/test_memory.py # 记忆单测（43 项：分区/召回/衰减/重启）
+│   ├── tests/test_attention.py # 注意力单测（65 项：证据/排序/闸门/落盘）
+│   ├── tests/test_mind_events.py # 事件不丢 + 120 秒闸门 + 接线（17 项）
+│   ├── tests/p4_3_live.py # P4.3 真机核对：事实行 -> decision 全覆盖
 │   ├── state/worlds/<world>/ # 每世界的记忆、对话、状态、向量索引（gitignore）
 │   └── config.py          # 读 configs/local.json（含 mc.world / memory 段）
 ├── server/                # 主服 26.1.2，:25565，生存，离线（也是 M0 验收场地）
@@ -410,8 +443,8 @@ observer 候选（事实不变）
     │   ├── bot.js         # mineflayer 连接、状态快照、hardStop
     │   ├── tasks.js       # 顺序执行 / 抢占 / 排队 / 取消 / hold / 结果摘要
     │   ├── guardian.js    # 守护逻辑 priority 9：受击/低血/岩浆/虚空/饥饿
-│   ├── experiences.js # P4.1 经历账本（JSONL + 去重 + 裁剪 + 分区）
-│   ├── observer.js    # P4.2 世界观察 + 事件聚合（实体/方块聚类/地点/里程碑）
+│   │   ├── experiences.js # P4.1 经历账本（JSONL + 去重 + 裁剪 + 分区 + P4.3 addFact）
+│   │   ├── observer.js    # P4.2 世界观察 + 事件聚合（实体/方块聚类/地点/里程碑）
     │   ├── skills/        # mine / goto / follow / craft / deposit / attack / eat / equip / place
     │   ├── validate.js    # 背包增量、到达判定、方块掉落表
     │   └── config.js      # 配置（环境变量优先）

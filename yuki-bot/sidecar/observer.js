@@ -35,6 +35,7 @@ const DEFAULTS = {
   areaCellSize: 64, // 地点按 64 格分格
   areaDwellMs: 4000, // 到达一个新地方要停留多久才算「到了」
   cooldownMs: 3 * 60 * 1000, // 同 kind+subject 在这个窗口内不再报
+  landmarkCooldownMs: 3 * 60 * 1000, // 地点按区域冷却：跑图跨格不该连续放行
   mergeWindowMs: 5 * 60 * 1000 // 同一处继续搭，合并进上一条候选而不是再报一次
 }
 
@@ -232,17 +233,21 @@ class AreaTracker {
     this.pending = null
     const p = sample.pos || {}
     const cell = Math.max(1, Number(this.opts.areaCellSize || 64))
+    const biome = sample.biome || 'unknown'
     return {
       kind: 'landmark_arrival',
-      subject: `area:${sample.biome || 'unknown'}:${Math.floor((p.x || 0) / cell)}:${Math.floor((p.z || 0) / cell)}`,
+      // 冷却按「区域」算：subject 只留维度+生物群系，64 格坐标进 detail。
+      // 否则跑图每跨一格就是一条新 subject，冷却形同虚设。
+      subject: `area:${sample.dimension || ''}:${biome}`,
       location: { x: Math.round(p.x || 0), y: Math.round(p.y || 0), z: Math.round(p.z || 0) },
       summary: '',
       salience: null,
       confidence: 0.6,
       novelty: null,
       detail: {
-        biome: sample.biome || 'unknown',
+        biome,
         dimension: sample.dimension || '',
+        cell: { x: Math.floor((p.x || 0) / cell), z: Math.floor((p.z || 0) / cell) },
         reason: 'environment_changed'
       }
     }
@@ -251,7 +256,12 @@ class AreaTracker {
 
 // ---------------- 看过的东西表 ----------------
 
-/** 见过的东西存盘：没有它，「初遇」每次重启都会重来一遍。 */
+/**
+ * 见过的东西存盘：没有它，「初遇」每次重启都会重来一遍。
+ * P4.3：key → {count, last_at, last_subject}。只有次数才能表达「见过很多次」，
+ * 单存时间戳会让「见过一次」和「见过一百次」在注意力眼里一模一样。
+ * 兼容旧文件（值直接是时间戳）：读成 count=1。
+ */
 class SeenTable {
   constructor (file, opts = {}) {
     this.file = path.resolve(file)
@@ -264,7 +274,24 @@ class SeenTable {
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'))
       const seen = raw && raw.seen && typeof raw.seen === 'object' ? raw.seen : {}
-      for (const [key, at] of Object.entries(seen)) this.seen.set(key, Number(at) || 0)
+      for (const [key, value] of Object.entries(seen)) {
+        if (value && typeof value === 'object') {
+          this.seen.set(key, {
+            count: Math.max(0, Number(value.count) || 0),
+            last_at: Number(value.last_at) || 0,
+            last_subject: String(value.last_subject || '')
+          })
+        } else {
+          this.seen.set(key, { count: 1, last_at: Number(value) || 0, last_subject: '' })
+        }
+      }
+      // 旧版 key 是类级 entity:sheep；P4.3 的 key 带 kind。迁移一次，
+      // 否则升级后所有老熟人都被当成初遇，novelty 集体冲到 1。
+      for (const [key, entry] of [...this.seen.entries()]) {
+        if (!key.startsWith('entity:')) continue
+        const migrated = `new_entity:mob:${key.slice('entity:'.length)}`
+        if (!this.seen.has(migrated)) this.seen.set(migrated, { ...entry })
+      }
     } catch (_) { /* 没文件/读坏了都从空表开始 */ }
     this.loaded = true
     return this
@@ -274,24 +301,37 @@ class SeenTable {
 
   has (key) { this._ensure(); return this.seen.has(key) }
 
-  add (key, now = Date.now()) {
+  /** 只读：拿「之前」见过几次、最后一次什么时候。不登记。 */
+  info (key) {
     this._ensure()
-    if (!key) return false
-    const isNew = !this.seen.has(key)
-    this.seen.set(key, now)
+    const hit = this.seen.get(key)
+    return hit ? { ...hit } : { count: 0, last_at: 0, last_subject: '' }
+  }
+
+  /** 登记一次；返回登记后的条目（count 已 +1）。 */
+  add (key, now = Date.now(), subject = '') {
+    this._ensure()
+    if (!key) return { count: 0, last_at: 0, last_subject: '' }
+    const prev = this.seen.get(key)
+    const entry = {
+      count: (prev ? Number(prev.count) || 0 : 0) + 1,
+      last_at: Number(now) || Date.now(),
+      last_subject: String(subject || (prev && prev.last_subject) || '')
+    }
+    this.seen.set(key, entry)
     if (this.seen.size > this.max) {
-      const sorted = [...this.seen.entries()].sort((a, b) => a[1] - b[1])
+      const sorted = [...this.seen.entries()].sort((a, b) => a[1].last_at - b[1].last_at)
       this.seen = new Map(sorted.slice(-this.max))
     }
-    if (isNew) this.save()
-    return isNew
+    this.save()
+    return { ...entry }
   }
 
   save () {
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true })
       const tmp = `${this.file}.tmp`
-      fs.writeFileSync(tmp, JSON.stringify({ version: 1, seen: Object.fromEntries(this.seen) }))
+      fs.writeFileSync(tmp, JSON.stringify({ version: 2, seen: Object.fromEntries(this.seen) }))
       fs.renameSync(tmp, this.file)
     } catch (err) {
       log.warn('seen_save_failed', { error: err.message })
@@ -416,17 +456,13 @@ class WorldObserver {
     if (!pos || !botPos) return
     const distance = Math.sqrt((pos.x - botPos.x) ** 2 + (pos.y - botPos.y) ** 2 + (pos.z - botPos.z) ** 2)
     if (distance > this.opts.entityRange) return
-    const seenKey = `entity:${cls.name}`
-    const novelty = this.seen && this.seen.has(seenKey) ? 0 : 1
-    if (novelty && this.seen) this.seen.add(seenKey, now)
     this._deliver({
       kind: 'new_entity',
       subject: `mob:${cls.name}`,
       location: { x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) },
       summary: '',
       salience: null,
-      confidence: novelty ? 0.8 : 0.5,
-      novelty,
+      confidence: 0.8,
       detail: {
         entity_name: cls.name,
         category: cls.type,
@@ -515,12 +551,16 @@ class WorldObserver {
     const prev = this.lastByKey.get(key)
     if (prev && now - prev.at <= this.opts.mergeWindowMs && MERGEABLE.has(candidate.kind)) {
       const merged = mergeCandidate(prev, candidate, now)
+      this._feature(merged, now)
       this.lastByKey.set(key, merged)
       this.stats.merged += 1
       this._record(merged, 'merged')
       return 'merged'
     }
-    if (prev && now - prev.at <= this.opts.cooldownMs) {
+    const cooldown = candidate.kind === 'landmark_arrival'
+      ? this.opts.landmarkCooldownMs
+      : this.opts.cooldownMs
+    if (prev && now - prev.at <= cooldown) {
       this.stats.suppressed += 1
       return 'suppressed'
     }
@@ -529,9 +569,27 @@ class WorldObserver {
       const cutoff = now - this.opts.mergeWindowMs
       for (const [k, v] of this.lastByKey) if (v.at <= cutoff) this.lastByKey.delete(k)
     }
+    this._feature(candidate, now)
     this.stats.candidates += 1
     this._record(candidate, 'new')
     return 'new'
+  }
+
+  /**
+   * 给候选补上「以前见过几次」的事实（不评分，只报数）。
+   * features.seen 是**这次之前**的统计；novelty 只在第一次见到该类时为 1。
+   * 连续新颖度由 planner 侧按 count + 间隔算，这里不替它下结论。
+   */
+  _feature (candidate, now) {
+    if (!this.seen) return
+    const key = `${candidate.kind}:${candidate.subject}`
+    const prior = this.seen.info(key)
+    candidate.features = {
+      ...(candidate.features || {}),
+      seen: { count: prior.count, last_at: prior.last_at }
+    }
+    candidate.novelty = prior.count === 0 ? 1 : 0
+    this.seen.add(key, now, candidate.subject)
   }
 
   _record (candidate, status) {

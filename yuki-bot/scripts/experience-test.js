@@ -105,5 +105,36 @@ const T0 = 1793369000000
   fs.rmSync(dir, { recursive: true, force: true })
 }
 
+// ---------- P4.3：候选立即落成事实行（同 id 可追加更新） ----------
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuki-exp-fact-'))
+  const file = path.join(dir, 'experiences.jsonl')
+  const store = new ExperienceStore(file, { maxEntries: 10, dedupeWindowMs: 600000 })
+  const candidate = {
+    id: 'cand-1',
+    at: T0,
+    kind: 'construction_candidate',
+    subject: 'cluster:0:0',
+    summary: '',
+    confidence: 0.8,
+    location: { x: 1, y: 64, z: 1 },
+    detail: { block_count: 3, block_names: ['white_wool'], pattern: 'unknown' },
+    features: { seen: { count: 0, last_at: 0 } }
+  }
+  store.addFact(candidate, T0)
+  candidate.detail.block_count = 18
+  candidate.features.seen.count = 1
+  store.addFact(candidate, T0 + 5000)
+  const rows = store.recent(10)
+  check('fact: 同一候选可追加（读侧取最后一行）', rows.length === 2 && rows[1].id === 'cand-1' && rows[1].detail.block_count === 18)
+  check('fact: salience 保持 null（还没打分）', rows.every((r) => r.salience === null))
+  check('fact: visual 先记 none', rows.every((r) => r.visual === 'none'))
+  check('fact: features 原样落盘', rows[1].features.seen.count === 1)
+  check('fact: 位置进 detail 便于以后复盘', rows[0].detail.location.x === 1)
+  const appended = fs.readFileSync(file, 'utf8').trim().split('\n')
+  check('fact: 只是追加，不改写历史行', appended.length === 2 && JSON.parse(appended[0]).detail.block_count === 3)
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
 console.log(`\n${passed} passed, ${failed} failed`)
 process.exit(failed ? 1 : 0)

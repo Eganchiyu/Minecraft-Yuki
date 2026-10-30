@@ -148,7 +148,7 @@ const T0 = 1793369000000
   check('seen: 第一次是新', t.has('entity:sheep') === false)
   t.add('entity:sheep', T0)
   check('seen: 记下就认得', t.has('entity:sheep') === true)
-  check('seen: 重复 add 返回 false', t.add('entity:sheep', T0 + 1) === false)
+  check('seen: 重复 add 只累加次数', t.add('entity:sheep', T0 + 1).count === 2 && t.info('entity:sheep').count === 2)
   const reloaded = new SeenTable(file, { max: 16 })
   check('seen: 重启后仍在', reloaded.has('entity:sheep') === true)
   for (let i = 0; i < 20; i += 1) reloaded.add(`k${i}`, T0 + 2 + i)
@@ -318,6 +318,74 @@ function makeObserver (link, extra = {}) {
   link.bot.emit('entitySpawn', { name: 'sheep', type: 'animal', position: { x: 1, y: 64, z: 1 } })
   link.bot.emit('entitySpawn', { name: 'cow', type: 'animal', position: { x: 1, y: 64, z: 1 } })
   check('robust: 回调抛错后仍继续工作', calls === 2, String(calls))
+  observer.stop()
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+// ---------- 11. P4.3：seen 计数化 / 候选事实特征 / 地点按区域冷却 ----------
+{
+  // 旧格式（值就是时间戳）要能读，不能因为升级丢「见过」
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yuki-seen-v1-'))
+  const file = path.join(dir, 'seen.json')
+  fs.writeFileSync(file, JSON.stringify({ version: 1, seen: { 'entity:sheep': T0 } }))
+  const table = new SeenTable(file, { max: 16 })
+  check('seen v2: 旧文件读成 count=1', table.info('entity:sheep').count === 1 && table.info('entity:sheep').last_at === T0)
+  check('seen v2: 旧类级 key 迁到新 key（升级后不算初遇）',
+    table.info('new_entity:mob:sheep').count === 1, table.info('new_entity:mob:sheep'))
+  table.add('entity:sheep', T0 + 5, 'mob:sheep')
+  check('seen v2: 累加并记下主体', table.info('entity:sheep').count === 2 && table.info('entity:sheep').last_subject === 'mob:sheep')
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+  check('seen v2: 落盘带版本与次数', raw.version === 2 && raw.seen['entity:sheep'].count === 2)
+  check('seen v2: 没见过的返回空统计', table.info('entity:cow').count === 0)
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+{
+  const clock = { value: T0 }
+  const link = fakeLink()
+  const { observer, got, dir } = makeObserver(link, { warmupMs: 0, clock })
+  observer.start()
+  link.bot.emit('entitySpawn', { name: 'sheep', type: 'animal', position: { x: 2, y: 64, z: 0 } })
+  const first = got[0] && got[0].candidate
+  check('feature: 候选带 seen 事实', first && first.features && first.features.seen && first.features.seen.count === 0, first && first.features)
+  check('feature: 第一次见 novelty=1', first && first.novelty === 1)
+  clock.value = T0 + 4 * 60 * 1000
+  link.bot.emit('entitySpawn', { name: 'sheep', type: 'animal', position: { x: 3, y: 64, z: 0 } })
+  const second = got[1] && got[1].candidate
+  check('feature: 冷却过了再见一次会记数', second && second.features.seen.count === 1, second && second.features)
+  check('feature: 再见不是初遇（novelty=0）', second && second.novelty === 0)
+  check('feature: 见过次数落盘', observer.seen.info('new_entity:mob:sheep').count === 2)
+  observer.stop()
+  fs.rmSync(dir, { recursive: true, force: true })
+}
+
+{
+  const clock = { value: T0 }
+  const link = fakeLink()
+  const { observer, got, dir } = makeObserver(link, { warmupMs: 0, clock })
+  observer.start()
+  observer.tick(T0 + 1000)                       // 先登记 plains
+  link.setBiome('beach')
+  observer.tick(T0 + 2000)
+  observer.tick(T0 + 7000)                       // 停留够 4 秒
+  const arrivals = () => got.filter((g) => g.candidate.kind === 'landmark_arrival')
+  check('area cooldown: 到了海边报一条', arrivals().length === 1, JSON.stringify(arrivals()))
+  const firstSubject = arrivals()[0] && arrivals()[0].candidate.subject
+  check('area cooldown: subject 只按区域', firstSubject === 'area:overworld:beach', firstSubject)
+
+  // 同一个生物群系跨一格：签名变了，但冷却按区域，不该再报
+  link.setPos({ x: 70, y: 64, z: 0 })
+  observer.tick(T0 + 8000)
+  observer.tick(T0 + 14000)
+  check('area cooldown: 同群系跨格不再报', arrivals().length === 1, JSON.stringify(arrivals()))
+  check('area cooldown: 被冷却抑制计数', observer.status().stats.suppressed >= 1, observer.status().stats)
+
+  // 过了 3 分钟区域冷却：同一个群系换了地方仍算一次到达
+  clock.value = T0 + 200000
+  link.setPos({ x: 140, y: 64, z: 0 })
+  observer.tick(T0 + 201000)
+  observer.tick(T0 + 207000)
+  check('area cooldown: 冷却过后同群系可再报', arrivals().length === 2, JSON.stringify(arrivals()))
   observer.stop()
   fs.rmSync(dir, { recursive: true, force: true })
 }

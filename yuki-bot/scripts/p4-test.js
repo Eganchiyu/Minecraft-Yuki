@@ -110,6 +110,11 @@ async function main () {
   check('候选带 novelty 事实（不替你判价值）', sheep && [0, 1].includes(sheep.novelty), sheep && sheep.novelty)
   check('候选没有打分（分数留给 P4.3）', sheep && sheep.salience === null, sheep && sheep.salience)
   if (sheep) {
+    const facts = (await getJson('/experiences?n=100')).items
+    const fact = facts.find((f) => f.id === sheep.id)
+    check('候选立即落成事实行（侧车崩了也不丢）', Boolean(fact), fact)
+    check('事实行 salience=null / visual=none', fact && fact.salience === null && fact.visual === 'none', fact && { salience: fact.salience, visual: fact.visual })
+    check('事实行带 seen 计数', fact && fact.features && fact.features.seen && Number.isFinite(fact.features.seen.count), fact && fact.features)
     consoleCmd(`/summon minecraft:sheep ${ox + 3} ${oy + 2} ${oz + 2}`)
     await sleep(2000)
     const sheepAfter = byKind(await candidates(), 'new_entity').filter((c) => c.detail.entity_name === 'sheep').length
@@ -138,9 +143,15 @@ async function main () {
     return items.length > buildBefore ? items[items.length - 1] : null
   }, 15000)
   check('静默之后产生一条建造候选', Boolean(build), build && build.detail)
-  check('候选块数接近 18（keep 会跳过已占用的格子）', build && build.detail.block_count >= 12 && build.detail.block_count <= 18, build && build.detail.block_count)
+  // keep 只往空气里放：机主地形/上次留下的方块占掉的格子会被静默跳过，只保证「不少于最小簇」
+  check('候选块数在 3~18（keep 会跳过已占用的格子）', build && build.detail.block_count >= 3 && build.detail.block_count <= 18, build && build.detail.block_count)
   check('候选不给语义断言（pattern=unknown）', build && build.detail.pattern === 'unknown', build && build.detail.pattern)
   check('候选 summary 为空（人话由后面压缩）', build && build.summary === '')
+  if (build) {
+    const buildFacts = (await getJson('/experiences?n=100')).items.filter((f) => f.id === build.id)
+    check('建造事实行按同 id 追加', buildFacts.length >= 1, buildFacts.length)
+    check('建造事实行带块数与 features', buildFacts[0] && buildFacts[0].detail.block_count >= 3 && buildFacts[0].features, buildFacts[0] && buildFacts[0].detail)
+  }
   await sleep(3000)
   const buildAfter = byKind(await candidates(), 'construction_candidate').length
   check('同一组方块只产生一条候选', buildAfter === buildBefore + 1, { before: buildBefore, after: buildAfter })
@@ -168,7 +179,9 @@ async function main () {
   // ---------- 收尾：把我造的方块清掉 ----------
   console.log('\n## 收尾')
   consoleCmd(`/fill ${ox - 4} ${oy + 6} ${oz - 1} ${ox - 2} ${oy + 7} ${oz + 1} minecraft:air`)
-  const tableAt = done && done.detail && done.detail.results && done.detail.results[0] && done.detail.results[0].at
+  // task_done 的 detail 是两层：results[i].detail.at（坑 17 的老朋友，别再取错层）
+  const tableAt = done && done.detail && done.detail.results && done.detail.results[0] &&
+    done.detail.results[0].detail && done.detail.results[0].detail.at
   if (tableAt) consoleCmd(`/setblock ${tableAt.x} ${tableAt.y} ${tableAt.z} minecraft:air`)
   consoleCmd('/kill @e[type=minecraft:sheep]')
   await sleep(1000)

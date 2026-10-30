@@ -16,11 +16,19 @@ const stateDir = path.join(config.root, 'planner', 'state', 'worlds', config.wor
 // P4.1：经历账本与 planner 的记忆同世界分区（Node 采集、Python 只收压缩后的 capsule）
 const experiences = new ExperienceStore(path.join(stateDir, 'experiences.jsonl'), config.experience)
 // P4.2：观察者只产出候选（不评分、不唤醒、不截图），原始事实留在侧车
+// P4.3：候选立即以事实行落盘（salience=null），planner 离线也不丢；打分另写 decisions.jsonl
 const observer = config.experience.enabled
   ? createObserver({
     link,
     stateDir,
-    onCandidate: (candidate, status) => emit({ type: 'experience_candidate', status, candidate })
+    onCandidate: (candidate, status) => {
+      try {
+        experiences.addFact(candidate)
+      } catch (err) {
+        log.warn('experience_fact_failed', { error: err.message, id: candidate && candidate.id })
+      }
+      emit({ type: 'experience_candidate', status, candidate })
+    }
   })
   : null
 if (observer) link.observer = observer
