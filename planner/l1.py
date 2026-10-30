@@ -228,10 +228,16 @@ def state_text(state: dict) -> str:
         f"{p.get('name')}({p.get('x')},{p.get('y')},{p.get('z')},距离{p.get('distance')})"
         for p in players[:5]
     ) or "无"
-    return (
+    body = (
         f"位置{pos_text}；血量{state.get('health')}/饥饿{state.get('food')}；"
         f"背包：{inv_text}；附近玩家：{players_text}"
     )
+    # 反射状态：身体自己在打架/逃跑时，规划要走远的活会当场被打断——先告诉她
+    reflex = state.get("reflex")
+    if reflex and reflex != "idle":
+        label = {"defend": "正在和怪打", "flee": "正在撤", "recover": "在吃东西回血"}.get(reflex, reflex)
+        body += f"；身体状态：{label}（这是身体自己的反应，不是任务）"
+    return body
 
 
 def sanitize_say(text: str) -> str:

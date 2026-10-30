@@ -21,6 +21,23 @@ function emit (event) {
   if (event.type === 'task_done' || event.type === 'step_done') {
     log.info('event', { type: event.type, intention_id: event.intention_id, status: event.status, ok: event.ok })
   }
+  // 反射的状态转移也报上去：L1 靠它知道「刚才被打了、我自己打跑了」，
+  // 这些事不经过 L2，但得有人记得。
+  // 只把「开打 / 撤退 / 收手」报上去；recover→idle 这种内部流转不打扰她
+  if (event.type === 'reflex' && (event.to === 'defend' || event.to === 'flee')) {
+    postJson(`${config.plannerUrl}/event`, {
+      kind: `reflex_${event.to}`,
+      severity: event.severity,
+      detail: { from: event.from, reason: event.reason, ...(event.detail || {}) }
+    }, 7000).catch((err) => log.warn('reflex_forward_failed', { error: err.message }))
+  }
+  if (event.type === 'reflex_over') {
+    postJson(`${config.plannerUrl}/event`, {
+      kind: 'reflex_over',
+      severity: event.severity,
+      detail: { reason: event.reason, killed: event.killed, health: event.health }
+    }, 7000).catch((err) => log.warn('reflex_forward_failed', { error: err.message }))
+  }
   // P3：守护事件推给 L1 心智，休息时也得能被叫醒（severity≥7）
   if (event.type === 'emergency') {
     postJson(`${config.plannerUrl}/event`, {
@@ -90,7 +107,15 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, bot: link.ready ? 'ready' : 'offline', uptime_s: Math.round((Date.now() - startedAt) / 1000) })
     }
     if (req.method === 'GET' && url.pathname === '/state') {
-      return sendJson(res, 200, { ...link.snapshot(runner.snapshot()), guardian: guardian.status(), planner: config.plannerUrl })
+      const reflex = guardian.status()
+      return sendJson(res, 200, {
+        ...link.snapshot(runner.snapshot()),
+        // L2 也要看见：正在打架时别规划一条要走很远的活
+        reflex: reflex.state,
+        reflex_reason: reflex.reason,
+        guardian: reflex,
+        planner: config.plannerUrl
+      })
     }
     if (req.method === 'GET' && url.pathname === '/events') {
       return openSse(req, res)

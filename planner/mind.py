@@ -666,6 +666,10 @@ class Mind:
             "lava": "你脚边是岩浆",
             "void": "你快掉进虚空了",
             "hungry": "你处于饥饿状态",
+            # 反射状态机报上来的：她自己动手了，不是模型派的活
+            "reflex_defend": "周围有怪，你自己冲上去打了",
+            "reflex_flee": "打不过或者太危险，你自己先撤了",
+            "reflex_over": "刚才那阵过去了",
         }
         label = names.get(kind, kind or "出了点事")
         extra = ""
@@ -674,6 +678,13 @@ class Mind:
                 extra = f"，血量{detail.get('health')}"
             if detail.get("food") is not None:
                 extra += f"，饥饿{detail.get('food')}"
+            if detail.get("killed"):
+                extra += f"，打掉了 {detail['killed']} 只"
+            elif detail.get("reason"):
+                why = {"target_gone": "打完了", "target_escaped": "被它跑了", "timeout": "缠斗太久自己收了手",
+                       "low_health": "血太少只能撤", "creeper_in_fight": "来了苦力怕"}.get(detail["reason"])
+                if why:
+                    extra += f"（{why}）"
         return f"{label}{extra}"
 
     def _rate_ok(self) -> bool:

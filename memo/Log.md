@@ -262,3 +262,32 @@ README 项目结构里加了指向。
 **待办**
 1. `mount` 技能本体（文档里只有例子，验过语法与早退路径，没接到项目里）。
 2. 文档附录 A 档的其余项：`fish` / `enchant` / `anvil` / `trade` / `collect`。
+
+## 2026-10-30 脊髓反射：guardian 从「触发器列表」重写成四态状态机（会打怪了）
+
+机主：受攻击/周围有怪时第一反应总是逃跑不好，应该能自己防御；这部分连 L2 都不参与，一直跑、状态转移再告知上层。
+
+**重写 `sidecar/guardian.js`**（文件名与 `Guardian` 导出不变，`index.js` 只加事件转发）
+- 四态：`idle` / `defend` / `flee` / `recover`。唯一转移出口 `_enter()`，每次转移上报 `{type:'reflex', from, to, reason, severity}`。
+- `idle` 每 250ms 扫 10 格内 `category==='Hostile mobs'`，有怪就 `_decide`。
+- `defend` 走 **mineflayer-pvp**（追击/走位/举盾），每刻检查：目标没了、跑出 32 格、缠斗超 45s、血 ≤6、来了苦力怕 → 收手。
+- `flee` 沿用原 `survive`/`escape`（吃一口 + 退开；岩浆找安全点或原地跳）。
+- `recover` 吃到饥饿值 ≥18（原版回血线，不是吃饱 20）。
+- 判据抽成纯函数 `chooseReaction({threats, health, hasWeapon})`，好测、好调：苦力怕永远跑 / >2 只跑 / 血≤6 跑 / 空手且(血<16 或 多只) 跑 / 血<10 跑 / 其余打。
+- 打或跑都要抢占：`runner.cancel` + `runner.hold`；收手 `releaseHold`。**正在执行 L2 派的 `attack` 时不抢**（`_inCombat()`），否则任务白废。
+- 收手统一上报 `reflex_over`（reason / killed / health），击杀数用 `entityDead` 记，不用 `stoppedAttacking`（我们主动收手时它也会发，会虚计）。
+
+**上报路径**：`reflex`(只在 defend/flee) + `reflex_over` → `POST /event` → `mind.on_event`。
+severity：flee=8（会叫醒）、defend=5、recover/idle=3（知会档，不打断）。`mind._event_text` 加了 `reflex_defend/reflex_flee/reflex_over` 的中文标签与「打掉几只/为什么收手」的补语。
+
+**L2 也看得见**：`/state` 加 `reflex` 与 `reflex_reason`；`l1.state_text()` 与 `prompts.world_block()` 都会输出「身体：正跟怪打」，
+反射压过任务时不再显示"正在做：mine"，免得 L2 派一条走很远的活当场被打断。
+
+**验证**
+- 新增 `node yuki-bot/scripts/reflex-test.js` 29/29：`chooseReaction` 12 例、敌对识别与 10 格筛选与按距离排序、
+  状态机骨架（开打抢占/占身、`reflex` 事件带 from/to/reason、血掉下来收手且 reason=low_health、目标没了收手并报 `reflex_over`、冷却）。
+- `skills-test.js` 45/45 未回归；`test_domains.py` 44/44、`test_memory.py` 43/43、`test_p2.py` 30 过 1 挂（既有）。
+- 没起服，pvp 实战（走位、举盾、苦力怕炸）未验。
+
+**种植/收割、繁殖**：能做但没做。繁殖简单（拿小麦/胡萝卜 `activateEntity` 两只）；种植是组合型（锄地→播种→等成熟→收→补种），
+且"等成熟"是长循环，不符合"一个技能一个动作"，得当成 task 而不是 skill。放在反射稳定之后再说。
