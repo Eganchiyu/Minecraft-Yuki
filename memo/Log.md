@@ -237,3 +237,28 @@
 - 真模型 4 例：`把这几个粗铁烧成铁锭`→`smelt raw_iron×6`；`挖点铁矿然后烧成铁锭做把铁镐`→`mine→smelt→craft` 完整链；`天黑了去睡一觉`→`sleep`；`把门打开`→`use oak_door`。`invalid_rate=0`。
 
 **未做**：熔炉的真实端到端验收（要起服）。`smelt` 的 putInput/takeOutput 时序只在单测与源码层面验过，没在真服务端跑过一炉。
+
+## 2026-10-30 写 `docs/技能开发指南.md`：加技能的固定流程 + 待添加盘点
+
+机主要求：以后加技能（比如上船）知道怎么做，并盘点还值得加什么。
+
+**文档内容**：技能契约（`{name, run(args,ctx)}` → `{ok, detail}`）／必改的 6 处及「漏了会怎样」／`ctx` 与 `link` 可用面／三条硬纪律／归域标准／参数校验／单测怎么写／完整例子（上船）／起服真验／待添加盘点。
+README 项目结构里加了指向。
+
+**写文档时挖出来的一条坑（已写进纪律 3）**：`bot.mount`/`dismount`/`attack`/`activateBlock`/`swingArm` 都是**同步返回、不返回 Promise**，只是发了个包。
+`await raceTimeout(bot.mount(e), 5000)` 会当场炸（`bot.mount(e)` 是 `undefined`）。正确写法是发完自己轮询状态。
+`openFurnace`/`sleep`/`fish`/`collectBlock.collect` 才是真 Promise。这条以前没记录，`use.js` 里用的 `activateBlock` 是靠 `await raceTimeout` 包的，
+但它 `return` 的是 `undefined` → `raceTimeout(undefined, 5000)` 会走 `promise.then` 报错。**`use.js` 里这是个真 bug，还没修**，见下方待办。
+
+**上船例子已验**：从文档里抽出代码块 `node --check` 通过，`isVehicle` 对 oak_boat/pale_oak_boat/minecart/horse 为真、sheep 为假；
+假 ctx 跑了 `bot_not_ready`/`no_vehicle`/`not_riding` 三条路径，行为正确。载具名从 mcData 正则推，不写死（每个版本都加新木种的船）。
+
+**盘点结论（写进文档附录）**
+- A 档（核心现成，20–60 行）：`mount` 上船/矿车/马、`fish` 钓鱼、`enchant` 附魔、`anvil` 改名合并、`trade` 村民交易、告示牌/书、`collect` 捡掉落物。
+- B 档（要自己 clickWindow）：切石机/织布机/信标/酿造台/合成器 —— 先做 A 档里有封装的那三个，别一上来写通用 GUI。
+- C 档（组合型，先别做）：种植收割、繁殖、盾牌、拉弓、鞘翅。
+- 不建议：命令方块（要 op、风险高）、酿造。
+
+**待办**
+1. `use.js` 的 `raceTimeout(bot.activateBlock(...))` 传的是 `undefined`，要改成「发完包 + 轮询窗口/方块状态」。这是文档纪律 3 暴露出的现存 bug。
+2. `mount` 技能本体（文档里只有例子）。
