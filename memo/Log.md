@@ -187,3 +187,26 @@
 **不抄**：Lua 沙箱组合（与我们 `schema.py` 明文"表达式能力一律拒收"相冲，先不动）、自研 2.9 万字 ADR 的 pathing、`shape.*` WorldEdit（2511 行 Lua + 大量 Java）、ui/mcp/ai 模块、权限层（判"这方块是谁的"要有服务端视角，我们做不到）。
 
 **待机主定**：① 目标是"进 26.2"还是"能力更强"；② 若走 Fabric 身体，能否接受服务器必修 mod；③ 先做文本 skills / 生存链 / GUI+熔炉技能 哪一项。
+
+## 2026-10-30 L2 分域 + 领域专家 + notes 回流（机主定：L1 当小傻子，L2 当专家）
+
+机主拍板：**不给 L1 加 skills**，L1 只管人格与意图；把 L2 抬到专家水准，并让它适时反馈 L1。走 A 路线（域路由），先用同一个模型。
+
+**改动（全部在 planner/，未碰 yuki-bot/）**
+- 新增 `planner/domains.py`：5 个具名域（gather/craft/interact/travel/combat）+ 兜底 `general`。每域 = 路由关键词 + 技能白名单 + 专家册（markdown）+ 额外规则。
+  路由是纯子串匹配、不过模型、零成本；一个都没命中就退 general（全 12 技能、无专家册），**最坏情况与加域之前完全一致**。
+- `schema.py`：`SKILLS` 改 frozenset；`validate_plan(payload, allowed=SKILLS)` 按域校验。域外技能 → SchemaError → 走原有一次修复 → 再不行拒收，**不会把域外步骤送进执行器**。
+- `prompts.py`：拆成 `SKILL_LINES`（12 行参数说明）、`SKILL_EXAMPLES`（每个技能一条真实例子，域 prompt 的 few-shot 用本域第一个技能）、`COMMON_RULES`（每条标注依赖哪些技能，域内不含该技能就不发这条）、`planner_system(domain)` / `replan_system(domain)`。技能行按域重新从 1 编号。`PLANNER_SYSTEM`/`REPLAN_SYSTEM` 保留为 general 版，旧引用不炸。
+- `l1.py`：`plan()` 先路由（或沿用 `domain_name`），返回 `Plan(list)` —— list 子类，`len()/索引/直接下发` 全兼容，`notes`/`domain` 只是挂在上面的属性，不会随 steps 进执行器。`Chain` 加 `domain`（重规划沿用，避免两段计划跨域打架）与 `notes`。
+- `mind.py`：`_dispatch`/`_escalate` 收 Plan、记 domain/notes；`_result_event` 在结果句尾附「（规划时提到：…）」，事实归 L2、措辞归 L1。
+- `app.py`：`/plan` 额外返回 `domain` 与 `notes`（steps 结构不变，验收脚本不受影响）。
+- 专家册只写稳定机制（工具等级、配方链、怪物行为、容器格数），矿石分布标了「1.18+，版本大改要复核」；并写明**我们没有的能力**（熔炼/附魔/精确取槽），避免 L2 规划走不通的链。
+
+**验证**
+- 新增 `planner/tests/test_domains.py` 40 项全过：路由 13 例、域内白名单、每域技能都有说明行、域 prompt 不含域外技能（用词边界判，`Minecraft` 里含 mine/craft 会假报）、notes 解析且不混进 steps、阶段名复用、域外技能被拒。
+- `test_p2.py` 30 过 1 挂（既有「超过 5 步」，测试写 5 而 `MAX_STEPS=15`，与本次无关）；`test_memory.py` 43/43。
+- 真模型（deepseek-flash）6 例实测：`invalid_rate=0`，路由 6/6 正确。典型输出：`去挖点铁矿` → `mine iron_ore ×4` + notes「只有木镐，挖铁矿不掉落，得先有石镐；且没有熔炼能力」——专家册确实在起作用。
+- HTTP 端到端（临时 8871 端口）：`/plan` 三例返回 `domain`/`notes` 正确，已停服、端口释放。
+
+**当前状态**：planner 可正常起（`domains.py` 是新依赖，与 `prompts.py` 互相无环）。世界仍停着（25565/8790/8791 空）。
+**待办（未做，等机主定）**：五条生存链（MLG 落地水/水下憋气/脱困）、GUI+熔炉技能、`ErrorKind` 式失败码枚举。其中熔炉是采集域「铁链断掉」的根因，优先于其它技能。

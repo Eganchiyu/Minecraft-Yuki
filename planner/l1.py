@@ -9,6 +9,7 @@ import uuid
 import aiohttp
 
 import config
+import domains
 import prompts
 from budget import BudgetExceeded, TaskBudget
 from facts import fallback_options, facts_text, extract_facts, options_to_text
@@ -63,6 +64,19 @@ class SidecarClient:
         return await self.post("/cancel", {"intention_id": intention_id, "reason": "l1_cancel"})
 
 
+class Plan(list):
+    """L2 的产出：steps（就是 list 本身，老代码照旧用）+ notes（给 L1 的一句提醒）。
+
+    做成 list 子类是为了不打断已有的 len()/索引/直接下发步骤的调用点；notes 只是挂在上面的属性，
+    不会跟着 steps 一起送进执行器。
+    """
+
+    def __init__(self, steps: list[dict], notes: str = "", domain: str = "") -> None:
+        super().__init__(steps)
+        self.notes = str(notes or "").strip()[:80]
+        self.domain = domain
+
+
 class PlanMetrics:
     """观测用：非法 JSON 比例、修复次数、重规划次数（P2 验收要看）。"""
 
@@ -100,10 +114,12 @@ class Planner:
         state_text: str,
         budget: TaskBudget | None = None,
         last_failure: dict | None = None,
-    ) -> list[dict]:
+        domain_name: str = "",
+    ) -> Plan:
+        domain = domains.by_name(domain_name) if domain_name else domains.route(text)
         if last_failure:
             messages = [
-                {"role": "system", "content": prompts.REPLAN_SYSTEM},
+                {"role": "system", "content": prompts.replan_system(domain)},
                 {
                     "role": "user",
                     "content": prompts.replan_user(
@@ -114,7 +130,7 @@ class Planner:
             purpose = "l2_replan"
         else:
             messages = [
-                {"role": "system", "content": prompts.PLANNER_SYSTEM},
+                {"role": "system", "content": prompts.planner_system(domain)},
                 {"role": "user", "content": prompts.planner_user(text, state_text)},
             ]
             purpose = "l2_plan"
@@ -125,8 +141,10 @@ class Planner:
             max_tokens=300, temperature=0.2, budget=budget
         )
         content = raw.get("content") or ""
+        allowed = frozenset(domain.skills)
         try:
-            return validate_plan(parse_json_object(content))
+            payload = parse_json_object(content)
+            return Plan(validate_plan(payload, allowed), payload.get("notes") or "", domain.name)
         except (SchemaError, ValueError) as exc:
             # 一次自动修复：把 schema 错误回灌，仍不合规就拒收
             self.metrics.invalid += 1
@@ -140,7 +158,8 @@ class Planner:
                 max_tokens=300, temperature=0.1, budget=budget
             )
             try:
-                return validate_plan(parse_json_object(raw2.get("content") or ""))
+                payload2 = parse_json_object(raw2.get("content") or "")
+                return Plan(validate_plan(payload2, allowed), payload2.get("notes") or "", domain.name)
             except (SchemaError, ValueError):
                 self.metrics.rejected += 1
                 raise
@@ -192,6 +211,8 @@ class Chain:
         self.replans = 0
         self.negotiated = False
         self.intention_ids: list[str] = []
+        self.domain = ""      # 第一次规划定下的域，重规划沿用它，避免两段计划跨域打架
+        self.notes = ""       # L2 留下的提醒，任务收尾时随结果一起交给 L1
 
 
 def state_text(state: dict) -> str:

@@ -3,7 +3,8 @@ from typing import Any
 
 MAX_STEPS = 15
 ON_FAIL = {"retry", "abort", "skip"}
-SKILLS = {"mine", "goto", "follow", "craft", "deposit", "attack", "eat", "equip", "place", "roam", "drop", "open"}
+# 全部技能。一次规划只放行其中一个域的子集（domains.py），这里的全集用于兜底域与合法性自检。
+SKILLS = frozenset({"mine", "goto", "follow", "craft", "deposit", "attack", "eat", "equip", "place", "roam", "drop", "open"})
 EQUIP_SLOTS = {"hand", "off-hand", "head", "torso", "legs", "feet"}
 MAX_OPTIONS = 3
 MIN_OPTIONS = 2
@@ -47,7 +48,7 @@ def _str(value: Any, field: str, max_len: int = 40) -> str:
     return value.strip()[:max_len]
 
 
-def _normalize_step(step: Any, index: int) -> dict:
+def _normalize_step(step: Any, index: int, allowed: frozenset = SKILLS) -> dict:
     if not isinstance(step, dict):
         raise SchemaError(f"steps[{index}] 不是对象")
     # 表达式能力一律拒收：出现 if/loop/when 这类字段说明它想写控制流
@@ -55,7 +56,7 @@ def _normalize_step(step: Any, index: int) -> dict:
     if extra:
         raise SchemaError(f"steps[{index}] 含不允许的字段: {sorted(extra)}")
     skill = step.get("skill")
-    if skill not in SKILLS:
+    if skill not in allowed:
         raise SchemaError(f"steps[{index}].skill 不在白名单: {skill!r}")
     args = step.get("args") or {}
     if not isinstance(args, dict):
@@ -162,8 +163,12 @@ def _normalize_step(step: Any, index: int) -> dict:
     return {"skill": skill, "args": clean, "on_fail": on_fail}
 
 
-def validate_plan(payload: Any) -> list[dict]:
-    """把 L2 输出收敛成干净的步骤列表；任何不合规都抛 SchemaError。"""
+def validate_plan(payload: Any, allowed: frozenset = SKILLS) -> list[dict]:
+    """把 L2 输出收敛成干净的步骤列表；任何不合规都抛 SchemaError。
+
+    allowed 是这一域放行的技能名（domains.Domain.skills）。路由选错域时 L2 会写出域外技能，
+    这里拒收 → 走一次修复 → 再不行就退回 L1，不会把域外步骤送进执行器。
+    """
     if not isinstance(payload, dict):
         raise SchemaError("顶层必须是对象")
     # 能力边界：L2 可以直接说「这个还没做」，不要去用别的技能拼凑
@@ -174,7 +179,7 @@ def validate_plan(payload: Any) -> list[dict]:
         raise SchemaError("steps 必须是非空数组")
     if len(steps) > MAX_STEPS:
         raise SchemaError(f"steps 超过 {MAX_STEPS} 步")
-    return [_normalize_step(step, i) for i, step in enumerate(steps)]
+    return [_normalize_step(step, i, allowed) for i, step in enumerate(steps)]
 
 
 def validate_options(payload: Any) -> list[dict]:

@@ -106,14 +106,15 @@ async def handle_plan(request: web.Request) -> web.Response:
     if last_failure is not None and not isinstance(last_failure, dict):
         return web.json_response({"error": "last_failure_must_be_object"}, status=400)
     try:
-        steps = await planner.plan(text, state_text_in, last_failure=last_failure)
+        plan = await planner.plan(text, state_text_in, last_failure=last_failure)
     except (SchemaError, ValueError) as exc:
         log.warning("plan_rejected text=%s error=%s", text, exc)
         return web.json_response({"error": "schema_rejected", "detail": str(exc)}, status=422)
     except Exception as exc:  # LLM 不可用等
         log.error("plan_failed text=%s error=%s", text, exc)
         return web.json_response({"error": "plan_failed", "detail": str(exc)}, status=503)
-    return web.json_response({"steps": steps})
+    # steps 之外带上域与 notes：验收脚本靠它看路由对不对、L2 有没有留下提醒
+    return web.json_response({"steps": plan, "domain": plan.domain, "notes": plan.notes})
 
 
 async def handle_dispatch(request: web.Request) -> web.Response:

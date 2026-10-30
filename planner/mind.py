@@ -186,7 +186,7 @@ class Mind:
                     log.info("places_updated", count=written, total=self.notes.count())
             self.state["current"] = None
             self._set_note(self._result_note(status, summary, text))
-            event = self._result_event(status, summary, text)
+            event = self._result_event(status, summary, text, chain.notes if chain else "")
             origin = (chain.origin if chain else "self_play") or "self_play"
             priority = int(current.get("priority") or 5)
             result = await self._turn(event, origin=origin, priority=priority, kind="after_task")
@@ -344,7 +344,7 @@ class Mind:
     async def _dispatch(self, text: str, priority: int, origin: str, chain: Chain | None = None) -> dict:
         chain = chain or Chain(text, priority, origin)
         try:
-            steps = await self.planner.plan(text, state_text(self.last_state), budget=chain.budget)
+            plan = await self.planner.plan(text, state_text(self.last_state), budget=chain.budget)
         except UnsupportedCapability as exc:
             return {"ok": False, "unsupported": exc.reason, "error": f"unsupported: {exc.reason}"}
         except (SchemaError, ValueError) as exc:
@@ -353,7 +353,9 @@ class Mind:
             return {"ok": False, "error": f"budget_exceeded: {exc}"}
         except LLMError as exc:
             return {"ok": False, "error": f"llm: {exc}"}
-        submitted = await self._submit_steps(chain, steps, text, priority, origin)
+        chain.domain = plan.domain or chain.domain
+        chain.notes = chain.notes or plan.notes
+        submitted = await self._submit_steps(chain, plan, text, priority, origin)
         if submitted.get("ok"):
             self.metrics["intentions"] += 1
             self.state["current"] = {
@@ -387,7 +389,7 @@ class Mind:
         self.chains[intention_id] = chain
         self._prune_chains()
         self.last_budget = chain.budget.snapshot()
-        return {"ok": True, "intention_id": intention_id, "steps": steps}
+        return {"ok": True, "intention_id": intention_id, "steps": list(steps)}
 
     async def _escalate(self, chain: Chain, intention_id: str, summary: str, detail: dict) -> dict | None:
         """失败升级（决策 #22）：L2 带事实先自修，用尽后把事实 + 方案当消息交回她。"""
@@ -399,12 +401,14 @@ class Mind:
         while chain.budget.take_retry():
             chain.replans += 1
             try:
-                steps = await self.planner.plan(
-                    chain.text, state_text(self.last_state), budget=chain.budget, last_failure=facts
+                plan = await self.planner.plan(
+                    chain.text, state_text(self.last_state), budget=chain.budget,
+                    last_failure=facts, domain_name=chain.domain,
                 )
             except (SchemaError, ValueError, LLMError, BudgetExceeded):
                 break
-            submitted = await self._submit_steps(chain, steps, chain.text, chain.priority, "self_repair")
+            chain.notes = plan.notes or chain.notes
+            submitted = await self._submit_steps(chain, plan, chain.text, chain.priority, "self_repair")
             if submitted.get("ok"):
                 self.state["current"] = {
                     "intention_id": submitted["intention_id"],
@@ -643,13 +647,17 @@ class Mind:
             return f"{name}被打断了喵，等一小会再试试"
         return f"{name}没做成：{summary}"
 
-    def _result_event(self, status: str, summary: str, text: str) -> str:
+    def _result_event(self, status: str, summary: str, text: str, notes: str = "") -> str:
         mapping = {"done": "完成了", "failed": "没做成", "aborted": "被打断了"}
         name = f"「{text}」" if text else "刚那件事"
         body = f"{name}{mapping.get(status, status)}"
         if summary:
             body += f"：{summary}"
-        return body + "。"
+        body += "。"
+        # L2 的提醒随结果一起交回 L1：事实归 L2，措辞归 L1，不要在这里加工成人话
+        if notes:
+            body += f"（规划时提到：{notes}）"
+        return body
 
     def _event_text(self, kind: str, detail: dict) -> str:
         names = {
