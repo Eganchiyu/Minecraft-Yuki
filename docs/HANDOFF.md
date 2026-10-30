@@ -127,9 +127,9 @@ free -g | head -2
 
 ---
 
-## 2. 当前状态（2026-10-30 收工，P4 前）
+## 2. 当前状态（2026-10-30 收工，P4.2 后）
 
-**一句话**：P0–P3 全通，15 项技能 + L2 分域专家 + 四态反射机（含 MLG）已落地；世界当前**全停**（25565/25566/8790/8791 空）。下一步是 PRD v0.3 的 **P4 体验闭环**，从 P4.0（观战截图链路验证）开始。
+**一句话**：P0–P3 全通，**P4.1 经历账本 + P4.2 世界观察/事件聚合已落地**；世界当前**全停**（25565/25566/8790/8791 空）。下一步是 **P4.3 Salience Scorer + Attention Scheduler**（给候选打分、决定记录/唤醒/申请截图）。P4.0 观战截图跟随仍等机主肉眼确认，不阻塞。
 
 **已完成（按时间）**
 
@@ -140,6 +140,8 @@ free -g | head -2
 - 技能 15 个：mine goto follow craft deposit attack eat equip place roam drop open smelt sleep use（加技能流程见 `docs/技能开发指南.md`）
 - `guardian.js` 四态机 idle/defend/flee/recover + `mlg` 自救；`reflex-test.js` 29/29、`mlg-test.js` 18/18
 - 客户端换肤：CustomSkinLoader 本地皮肤 `Yuki-chan.png`（只对机主客户端可见），**尚未肉眼验收**
+- P4.1 经历账本：`sidecar/experiences.js` — JSONL 真相 + `(kind, subject)` 时间窗去重 + TTL/条数裁剪 + 世界分区 `experiences.jsonl`；24 项单测
+- P4.2 观察者/聚合器：`sidecar/observer.js` — `entitySpawn`→`new_entity`、`blockUpdate` 聚类→`construction_candidate`（3 秒静默、最少 3 块、8 格分格 subject、同一处继续搭算合并）、生物群系/64 格网格变化→`landmark_arrival`、`task_done`→`task_milestone`；`seen.json` 记「见过的东西」；`GET /candidates`、`/state.observer`、SSE `experience_candidate`；70 项单测 + 真机验收 `scripts/p4-run.sh` 18/18
 
 **未验 / 已知欠账**
 
@@ -147,6 +149,8 @@ free -g | head -2
 - `mlg` 真实坠落未验（触发 3.5 格、等水 800ms、等落地 3s 均为估算）
 - pvp 实战（走位、举盾、苦力怕）未验
 - `test_p2.py` 30 过 1 挂（既有「超过 5 步」用例与 `MAX_STEPS=15` 不符，与功能无关）
+- P4.2 只在主服出生点空场地验过：矿洞、密集村庄、成群动物这些噪声大的地形，阈值（32 格、3 块、3 秒）还没调过
+- P4.2 候选**只进内存**（`/candidates` 留最近 50 条），还没写进 `experiences.jsonl`——落盘与打分一起在 P4.3 接
 - 常驻世界默认停；要起用 `bash scripts/world-up.sh`
 
 ---
@@ -158,14 +162,17 @@ free -g | head -2
 按顺序做，每步独立可演示：
 
 1. [ ] **P4.0 截图链路人工验证**：起服 + sidecar + spectator 客户端，让 Yuki 移动/转头，确认 `ffmpeg x11grab` 抓到的画面是否跟随；结论写回 PRD/HANDOFF。不同步则截图限定人工触发，不阻塞 P4
-2. [ ] **P4.1 经历数据结构与落盘**：`Experience` / `ExperienceCapsule`、去重键、世界分区、过期与截断；纯函数单测（序列化/去重/重启恢复）
-3. [ ] **P4.2 World Observer + Event Grouper**：先做 `new_entity`（初遇实体）、`block_change_cluster`（短静默窗口 + 空间相邻的人工方块变化）、`landmark_arrival`、`task_milestone`；不做建筑语义断言
-4. [ ] **P4.3 Salience Scorer + Attention Scheduler**：配置化权重（novelty / surprise / interest / social / progress / repeat penalty / interruption cost / confidence）；记录阈值、唤醒阈值、截图阈值三者分开；任务或反射期间只记录
+2. [x] **P4.1 经历数据结构与落盘**：`Experience` / `ExperienceCapsule`、去重键、世界分区、过期与截断；纯函数单测（序列化/去重/重启恢复）
+3. [x] **P4.2 World Observer + Event Grouper**：先做 `new_entity`（初遇实体）、`block_change_cluster`（短静默窗口 + 空间相邻的人工方块变化）、`landmark_arrival`、`task_milestone`；不做建筑语义断言
+4. [ ] **P4.3 Salience Scorer + Attention Scheduler**（下一步）：配置化权重（novelty / surprise / interest / social / progress / repeat penalty / interruption cost / confidence）；记录阈值、唤醒阈值、截图阈值三者分开；任务或反射期间只记录。入参就是 `/candidates` 里那批事实（`novelty`/`confidence`/`detail.block_count` 等），打分后写 `experiences.jsonl`
 5. [ ] **P4.4 Capsule → L1**：压成一两句人话 + 有限选项（含 ignore/no_action），复用现有事件唤醒路径；行动仍走 intention → L2 → L3；经历写入记忆
 6. [ ] **P5（后续）**：Snapshot Scheduler（开关/间隔/配额/稳定窗口）、Vision Adapter、主动观察、爱心端到端验收
 7. [ ] **P6（后续）**：按真实使用反馈决定兴趣权重、心愿、mood、锚点；回归与长跑
 
 **P4 总验收**：初遇实体、建造候选、任务里程碑各完成一次「发现 → L1 反应或忽略 → 经历落盘」；外部指令能立即接管低优先级体验行动；任务与守护无明显延迟。
+
+**P4.2 验收怎么跑**：`bash scripts/p4-run.sh`（起主服 + 侧车，控制台造场景，全停收尾；不启动 planner）。
+场景断言：放 18 块只出 1 条 `construction_candidate` 且 `pattern=unknown`；第二只羊不重复报；她自己放的方块不产生候选；`place` 做完出一条 `task_milestone`。
 
 **顺带可做（非 P4 阻塞项）**：`mount` 技能本体、`fish`/`collect`、`smelt` 真服验收。
 
@@ -210,6 +217,9 @@ free -g | head -2
 | 35 | **记录 / 唤醒 / 截图是三个不同门槛**；低分事件只落盘，不叫醒 L1，更不截图 | 否则变成「每个变化都播报」的刷屏机，还会烧 token |
 | 36 | 编排层只提供候选与评分，**L1 保留最终意愿**（含 ignore / no_action）；行动仍走 intention → L2 → L3 | 编排层不能替她做价值判断，也不能变成自动派任务器 |
 | 37 | 先报候选、不靠方块 ID 断言语义（不写「这是爱心/房子」）；语义交给视觉或 L1 | 结构检测便宜可靠，语义判断容易假积极 |
+| 38 | P4.2 候选**只带事实**（`novelty` / `confidence` / `detail.block_count`），`salience` 恒为 `null`，且**不写经历账本**；打分与落盘整体归 P4.3 | 观察者一旦自己打分，权重就散在两处；分数与写入应该一起改一起调 |
+| 39 | 同一处继续搭：`(kind, subject)` 5 分钟内**合并**成同一条候选（块数累加），3 分钟冷却用于「同一种羊/同一个地方」的重复抑制 | 搭爱心有停顿，静默窗口会切出好几批；不合并就会反复叫醒她，而合并后候选能反映整颗爱心 |
+| 40 | 「世界变了」不许包含**她自己的动作**：`place.js` 放成功后调 `observer.markSelfPlacement(pos)`，1 格内 2.5 秒的变化不算候选 | 她放工作台/熔炉本来就是任务的一部分，不该被自己当成风景 |
 
 ---
 
@@ -221,6 +231,8 @@ planner/state/worlds/<world>/          # 一个世界一个目录，world 来自
 ├── history.json   # 对话历史（重启接着上次说）
 ├── mind.json      # mode / note / rest_until 等状态
 ├── places.json    # 箱子表（notes.places_enabled 控制，默认关）
+├── experiences.jsonl # P4.1 经历账本（Node 侧写，L1 只收压缩摘要）
+├── seen.json      # P4.2 见过的东西表（初遇实体/去过的地方，重启不忘）
 └── chroma/        # 向量索引（可删，warmup 自动重建）
 ```
 
@@ -276,6 +288,9 @@ planner/state/worlds/<world>/          # 一个世界一个目录，world 来自
 33. **L2 会把人格层的中文称呼当玩家名**：Yuki 叫机主「小池」，L2 就规划出 `follow player:"小池2788"`，而游戏 ID 是 `xiaochi2788`。修法是把 `/state.players`（真实 ID + 坐标）喂给 L2，并在 prompt 里禁止音译/中文称呼。
 34. **bash `( cd x && cmd ) & echo $!` 拿到的可能不是真正的监听进程**（重定向/管道会多一层 subshell），用 pid 文件停服务时会出现"杀了旧 PID、新进程又 bind 失败"。可靠做法：启动后从 `ss -lntp` 按端口取真实 PID 写 pid 文件（`world-up.sh` 已这么做）。
 35. **验收脚本会漏掉"已经发生过"的 `task_start`**：`waitNew()` 注册监听晚于事件触发时永远等不到。判断抢占这类瞬时事件时，先用 `events.slice(before).find(...)` 查历史，再退化为等待。
+36. **控制台 `/give` 的目标名是 `configs/local.json` 的 `mc.username`（本机是 `Yuki-chan`，不是 `Yuki`）**：写错不报错，只是物品没到手，技能侧只看到 `item_not_in_inventory`。`/state` 里的 `username` 就是真实登录名。
+37. **`/setblock x y z block keep` 只在空气处生效**：造「玩家搭方块」场景时用它，不会改动机主地形里的原有方块；被占用的格子会静默跳过，所以断言块数要留区间而不是死等 18。
+38. **1.20.2 起 `bot.on('entitySpawn')` 也包含玩家实体**：不按 `username` / `type==='player'` 过滤，「玩家出现」会被当成初遇实体；道具、经验球、箭分别是 `other` / `projectile`，盔甲架是 `living`，都不该进候选。
 ---
 
 ## 6. 文件地图
@@ -293,6 +308,7 @@ planner/state/worlds/<world>/          # 一个世界一个目录，world 来自
 │   ├── m0-run.sh          # M0 一键验收：起服 -> 预置环境 -> 起服务 -> 跑脚本 -> 全停
 │   ├── p1-run.sh          # P1 一键验收：起服（带控制台 FIFO）-> 侧车 -> p1-test.js -> 全停
 │   ├── p2-run.sh          # P2 一键验收：单测 + 起服/planner/侧车 -> p2-test.js -> 全停
+│   ├── p4-run.sh          # P4.2 一键验收：起服（控制台 FIFO）+ 侧车 -> p4-test.js -> 全停
 │   ├── world-up.sh        # 常驻世界：主服 + planner + 侧车（PID 在 /tmp/yuki-world/）
 │   └── world-down.sh      # 优雅停掉常驻世界
 ├── planner/               # L1 人格 + L2 规划（Python 3.11 + aiohttp，:8791）
@@ -320,6 +336,8 @@ planner/state/worlds/<world>/          # 一个世界一个目录，world 来自
     │   ├── bot.js         # mineflayer 连接、状态快照、hardStop
     │   ├── tasks.js       # 顺序执行 / 抢占 / 排队 / 取消 / hold / 结果摘要
     │   ├── guardian.js    # 守护逻辑 priority 9：受击/低血/岩浆/虚空/饥饿
+│   ├── experiences.js # P4.1 经历账本（JSONL + 去重 + 裁剪 + 分区）
+│   ├── observer.js    # P4.2 世界观察 + 事件聚合（实体/方块聚类/地点/里程碑）
     │   ├── skills/        # mine / goto / follow / craft / deposit / attack / eat / equip / place
     │   ├── validate.js    # 背包增量、到达判定、方块掉落表
     │   └── config.js      # 配置（环境变量优先）

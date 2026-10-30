@@ -58,6 +58,21 @@ module.exports = {
     enabled: (process.env.SIDECAR_EXPERIENCE !== '0'),
     maxEntries: int(process.env.SIDECAR_EXPERIENCE_MAX, 500),
     ttlDays: int(process.env.SIDECAR_EXPERIENCE_TTL_DAYS, 30),
-    dedupeWindowMs: int(process.env.SIDECAR_EXPERIENCE_DEDUP_MS, 10 * 60 * 1000)
+    dedupeWindowMs: int(process.env.SIDECAR_EXPERIENCE_DEDUP_MS, 10 * 60 * 1000),
+    // P4.2 观察者：只看身边、只报候选；单位是毫秒/格
+    observer: {
+      entityRange: int(process.env.SIDECAR_OBS_ENTITY_RANGE, 32),
+      warmupMs: int(process.env.SIDECAR_OBS_WARMUP_MS, 4000),
+      blockRange: int(process.env.SIDECAR_OBS_BLOCK_RANGE, 32),
+      blockJoin: int(process.env.SIDECAR_OBS_BLOCK_JOIN, 2),
+      blockSilenceMs: int(process.env.SIDECAR_OBS_BLOCK_SILENCE_MS, 3000),
+      blockMinCount: int(process.env.SIDECAR_OBS_BLOCK_MIN, 3),
+      blockMaxPoints: int(process.env.SIDECAR_OBS_BLOCK_MAX_POINTS, 400),
+      selfFenceMs: int(process.env.SIDECAR_OBS_SELF_FENCE_MS, 2500),
+      areaCellSize: int(process.env.SIDECAR_OBS_AREA_CELL, 64),
+      areaDwellMs: int(process.env.SIDECAR_OBS_AREA_DWELL_MS, 4000),
+      cooldownMs: int(process.env.SIDECAR_OBS_COOLDOWN_MS, 3 * 60 * 1000),
+      mergeWindowMs: int(process.env.SIDECAR_OBS_MERGE_MS, 5 * 60 * 1000)
+    }
   }
 }

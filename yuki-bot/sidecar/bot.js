@@ -116,6 +116,7 @@ class BotLink {
     const bot = this.bot
     return {
       bot: this.ready ? 'ready' : 'offline',
+      username: bot ? bot.username : null,
       status: runtime.status,
       task: runtime.task || 'none',
       note: runtime.note,

@@ -354,3 +354,39 @@ severity：flee=8（会叫醒）、defend=5、recover/idle=3（知会档，不�
 1. 截图视角：spectator 客户端是否跟随 bot 朝向，需机主肉眼确认；若不同步，截图退化为固定镜头/人工触发。
 2. 兴趣权重初值：先按「新实体 > 建造候选 > 里程碑 > 环境变化」给默认权重，跑几天再按机主观感调。
 3. 经历写不写进 `memory.jsonl`（与日记同池）还是单独 `experiences.jsonl`：默认单独文件 + 摘要可被召回，等实现时确认。
+
+## 2026-10-30 P4.2 世界观察 + 事件聚合：把高频变化压成候选
+
+P4.1 已经落了经历账本，这一步补上「谁来发现值得注意的事」。新增 `sidecar/observer.js`（约 480 行，纯函数 + 一个类），
+只做**观察与聚合**，不打分、不唤醒、不截图（决策 #38）。
+
+**四类候选**
+- `new_entity`：`entitySpawn` + 距离 ≤32 + 只认 `animal/hostile/passive/water_creature/ambient`。
+  玩家、道具、经验球、箭、盔甲架一律排除（坑 38）。
+- `construction_candidate`：`blockUpdate` 里「从空 → 实心」才算放了一块（挖掉/替换不算），
+  切比雪夫 ≤2 连成簇，静默 3 秒后吐一条，少于 3 块直接丢。
+  facts 里只有 `block_count / distinct_count / block_names / span / pattern:'unknown'`，**不写「这是爱心」**。
+- `landmark_arrival`：签名 = 维度 + 生物群系 + 64 格网格；变了之后要停够 4 秒才算「到了」。
+- `task_milestone`：`task_done` 且 `status=done`，摘要直接复用任务结果那句人话。
+
+**两个容易漏的点**
+1. **同一处继续搭会切出好几批**（搭爱心中途停顿 >3 秒）。所以 `(kind, subject)` 5 分钟内合并成同一条候选，
+   块数累加、id 不变，回调里带 `status='merged'`；重复实体/重复到达靠 3 分钟冷却压住。
+2. **她自己的动作不算世界变化**：`place.js` 放成功后调 `observer.markSelfPlacement(pos)`，
+   1 格内 2.5 秒的变化被拦掉——否则她放个工作台就会被自己当成「有人在这儿搭东西」。
+
+**见过的东西表** `seen.json`（世界分区）：没有它，「初遇」每次重启都重来；上限 800 条，最旧的先掉。
+
+**接口**：`GET /candidates?n=`（最近 50 条 + 计数器）、`/state.observer`（pending_blocks / seen / stats）、
+SSE `experience_candidate`。候选**只进内存**，账本留给 P4.3 打分后再写（决策 #38）。
+
+**验证**：`node yuki-bot/scripts/observer-test.js` 70/70（假 bot：分类、聚类、静默、自我排除、合并、
+地点驻留、seen 持久化、回调抛错不影响后续）；真机 `bash scripts/p4-run.sh` 18/18 ——
+放 18 块只出 1 条候选且 `pattern=unknown`、第二只羊不重复报、自己放工作台不产生候选、`place` 完成出里程碑。
+回归：experience 24/24、skills 45/45、reflex 29/29。
+
+**新增坑**：`/give` 要用 `mc.username`（本机 `Yuki-chan`，不是 `Yuki`），写错静默失败、技能只报 `item_not_in_inventory`；
+`/setblock ... keep` 只在空气处生效，适合造场景又不动机主地形。
+
+**下一步 P4.3**：给这批候选打分（novelty / surprise / interest / social / progress / 重复惩罚 / 打断代价 / confidence），
+记录阈值与唤醒阈值分开；打分后的才写 `experiences.jsonl`。P4.0 观战截图跟随仍等机主肉眼验。

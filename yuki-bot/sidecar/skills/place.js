@@ -24,6 +24,15 @@ async function place (args, ctx) {
  * 返回 {ok, detail:{item, at, placed}}。
  */
 async function placeBlock (link, itemName, target, signal) {
+  const result = await placeBlockAt(link, itemName, target, signal)
+  // 告诉观察者「这一块是我自己放的」：否则她放个工作台也会被当成世界的变化
+  if (result.ok && link.observer && result.detail && result.detail.at) {
+    try { link.observer.markSelfPlacement(result.detail.at) } catch (_) { /* noop */ }
+  }
+  return result
+}
+
+async function placeBlockAt (link, itemName, target, signal) {
   const bot = link.bot
   const mcData = link.mcData
   const blockDef = mcData.blocksByName[itemName]

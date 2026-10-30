@@ -9,13 +9,21 @@ const { TaskRunner } = require('./tasks')
 const { Guardian } = require('./guardian')
 const { eatSomething } = require('./skills/eat')
 const { ExperienceStore } = require('./experiences')
+const { createObserver } = require('./observer')
 
 const link = new BotLink()
+const stateDir = path.join(config.root, 'planner', 'state', 'worlds', config.world)
 // P4.1：经历账本与 planner 的记忆同世界分区（Node 采集、Python 只收压缩后的 capsule）
-const experiences = new ExperienceStore(
-  path.join(config.root, 'planner', 'state', 'worlds', config.world, 'experiences.jsonl'),
-  config.experience
-)
+const experiences = new ExperienceStore(path.join(stateDir, 'experiences.jsonl'), config.experience)
+// P4.2：观察者只产出候选（不评分、不唤醒、不截图），原始事实留在侧车
+const observer = config.experience.enabled
+  ? createObserver({
+    link,
+    stateDir,
+    onCandidate: (candidate, status) => emit({ type: 'experience_candidate', status, candidate })
+  })
+  : null
+if (observer) link.observer = observer
 const sseClients = new Set()
 const startedAt = Date.now()
 
@@ -66,6 +74,8 @@ const runner = new TaskRunner({
   link,
   emit,
   onFinish: async ({ intention, status, summary, detail }) => {
+    // 任务做完本身就是一段经历；这里只登记，不额外唤醒（汇报走下面的 callback）
+    if (observer) observer.noteTaskDone({ status, summary, steps: intention.steps })
     const res = await postJson(`${config.plannerUrl}/callback`, {
       intention_id: intention.intention_id,
       status,
@@ -128,8 +138,14 @@ const server = http.createServer(async (req, res) => {
         reflex: reflex.state,
         reflex_reason: reflex.reason,
         guardian: reflex,
-        planner: config.plannerUrl
+        planner: config.plannerUrl,
+        observer: observer ? observer.status() : null
       })
+    }
+    if (req.method === 'GET' && url.pathname === '/candidates') {
+      if (!observer) return sendJson(res, 503, { error: 'observer_disabled' })
+      const n = Math.max(1, Math.min(50, parseInt(url.searchParams.get('n') || '20', 10) || 20))
+      return sendJson(res, 200, { world: config.world, stats: observer.status(), items: observer.recent(n) })
     }
     if (req.method === 'GET' && url.pathname === '/experiences') {
       const n = Math.max(1, Math.min(100, parseInt(url.searchParams.get('n') || '20', 10) || 20))
@@ -251,6 +267,7 @@ async function main () {
   try {
     await link.connect()
     guardian.start()
+    if (observer) observer.start()
     emit({ type: 'bot_ready', pos: link.pos() })
   } catch (err) {
     log.error('bot_connect_failed', { error: err.message })
@@ -261,6 +278,7 @@ async function main () {
 function shutdown (signal) {
   log.info('shutdown', { signal })
   try { guardian.stop() } catch (_) { /* noop */ }
+  try { if (observer) observer.stop() } catch (_) { /* noop */ }
   try { link.hardStop() } catch (_) { /* noop */ }
   for (const res of sseClients) { try { res.end() } catch (_) { /* noop */ } }
   if (link.bot) { try { link.bot.quit() } catch (_) { /* noop */ } }
