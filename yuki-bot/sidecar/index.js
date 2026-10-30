@@ -1,14 +1,21 @@
 'use strict'
 // sidecar/index.js —— L3 常驻侧车：HTTP 接口 + 任务状态机 + bot 连接。
 const http = require('http')
+const path = require('path')
 const config = require('./config')
 const log = require('./log')
 const { BotLink } = require('./bot')
 const { TaskRunner } = require('./tasks')
 const { Guardian } = require('./guardian')
 const { eatSomething } = require('./skills/eat')
+const { ExperienceStore } = require('./experiences')
 
 const link = new BotLink()
+// P4.1：经历账本与 planner 的记忆同世界分区（Node 采集、Python 只收压缩后的 capsule）
+const experiences = new ExperienceStore(
+  path.join(config.root, 'planner', 'state', 'worlds', config.world, 'experiences.jsonl'),
+  config.experience
+)
 const sseClients = new Set()
 const startedAt = Date.now()
 
@@ -123,6 +130,10 @@ const server = http.createServer(async (req, res) => {
         guardian: reflex,
         planner: config.plannerUrl
       })
+    }
+    if (req.method === 'GET' && url.pathname === '/experiences') {
+      const n = Math.max(1, Math.min(100, parseInt(url.searchParams.get('n') || '20', 10) || 20))
+      return sendJson(res, 200, { world: config.world, total: experiences.recent(1e9).length, items: experiences.recent(n) })
     }
     if (req.method === 'GET' && url.pathname === '/events') {
       return openSse(req, res)
