@@ -358,6 +358,15 @@ function summarize (results, steps) {
       parts.push(detail.opened ? `按了${what}，弹出了${detail.opened}` : `按了${what}`)
     } else if (result.skill === 'use') {
       parts.push(detail.error === 'no_such_block' ? '附近没找到那个东西' : '没能按下去')
+    } else if (result.skill === 'snapshot' && result.ok) {
+      // 图是 planner 抓的，这一侧只负责「摆好姿势」；别在这里说“没成功”
+      const view = detail.view || {}
+      const where = detail.turned === 'coords' ? '看向那格方块'
+        : detail.turned === 'angles' ? `转了 ${Math.round((view.yaw || 0) * 180 / Math.PI) || 0}°`
+          : '照现在的方向'
+      parts.push(`拍了张画面，${where}`)
+    } else if (result.skill === 'snapshot') {
+      parts.push(detail.error === 'look_failed' ? '转不过去那个方向' : '拍照的姿势没摆好')
     } else if (result.skill === 'roam' && result.ok) {
       parts.push(`在附近逛了逛，走了约 ${Math.round(detail.travel || 0)} 格`)
     } else if (result.skill === 'roam') {

@@ -291,8 +291,9 @@ async def mind_flow():
     )
     turns = []
 
-    async def fake_turn(user_text, origin, priority, kind, allow_tools=True):
-        turns.append({"text": user_text, "kind": kind, "priority": priority, "origin": origin})
+    async def fake_turn(user_text, origin, priority, kind, allow_tools=True, **kwargs):
+        turns.append({"text": user_text, "kind": kind, "priority": priority, "origin": origin,
+                      "image_path": kwargs.get("image_path")})
         return {"say": "咦，有只小羊", "intention_id": None, "intention": ""}
 
     m._turn = fake_turn
@@ -320,7 +321,7 @@ async def mind_busy():
     )
     turns = []
 
-    async def fake_turn(user_text, origin, priority, kind, allow_tools=True):
+    async def fake_turn(user_text, origin, priority, kind, allow_tools=True, **kwargs):
         turns.append(user_text)
         return {"say": ""}
 
@@ -345,7 +346,7 @@ async def mind_gate():
     )
     turns = []
 
-    async def fake_turn(user_text, origin, priority, kind, allow_tools=True):
+    async def fake_turn(user_text, origin, priority, kind, allow_tools=True, **kwargs):
         turns.append(user_text)
         return {"say": ""}
 
@@ -370,7 +371,7 @@ async def mind_silent():
         encoding="utf-8",
     )
 
-    async def fake_turn(user_text, origin, priority, kind, allow_tools=True):
+    async def fake_turn(user_text, origin, priority, kind, allow_tools=True, **kwargs):
         return {"say": "", "intention_id": None, "intention": ""}
 
     m._turn = fake_turn

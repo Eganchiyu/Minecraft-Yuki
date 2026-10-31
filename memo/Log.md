@@ -513,3 +513,43 @@ decision 与经历账本分开（决策 #44/#52）；planner 不在线也不丢�
 - 只在 127.0.0.1 上验过；公网延迟与对端白名单未验。
 - P4.4（胶囊→L1）真机验收仍未重跑；P5 截图在真实任务中未触发过一次真拍。
 - `spectate` 后若 YukiCam 自己死亡/被踢，脚本只在 `deaths` 变化或日志报错时重敲，未覆盖"客户端自己在旁观别的实体"。
+
+## 2026-10-31 「看一眼」：look 工具 + L2 snapshot 技能（原图直给 L1）
+
+**机主要求**：把截图注册成 L2 的功能，L1 想看时调用并把画面给 L1 看；走哪条由我定 —— 定的是③两者共用，
+不设频率上限（她自己决定），给 L1 的是**原图**（不是视觉摘要）。另外把 P5 自动截图也改成附原图。
+
+**实现**
+- `planner/config.py`：新增 `LOOK{enabled, show_image=true, max_image_bytes=4MB}`。
+- `planner/snapshot.py`：`SnapshotScheduler.capture(kind, hint, look_at)` —— 按需抓帧，**不查事件闸门**
+  （min_gap / per_hour / event_quota 都不看），仍保留 sanity 判废与 keep 裁剪；stats 加 `demand`。
+- `planner/look.py`（新）：`Looker.see()` 抓帧（不调视觉模型，原图自己看）+ `attachable()` 体积/开关判定 + `data_url()`。
+- `planner/prompts.py`：新增 `LOOK_TOOL`（参数只有一句 reason）；技能行/示例加 `snapshot`（第 16 项）。
+- `planner/schema.py`：`snapshot` 参数校验（reason ≤60、yaw -180..360、pitch -90..90、可选 x/y/z）。
+- `planner/domains.py`：新增 `observe` 域（skills=snapshot/goto/roam，关键词：看看/看一眼/环顾/拍张/截图…），
+  路由优先级放在 gather 之后、travel 之前；general 域也放行 snapshot。
+- `planner/mind.py`：`_turn` 支持 `image_path/image_caption`（图片作为 user 的 `image_url` 段）；
+  工具列表变成 `[intention, look]`；新增 `_look_turn()`（拍不到就如实说"眼睛看不见"）；
+  `callback` 里若这一步含 `snapshot` 步骤 → 抓帧并把原图随结果交回 L1；
+  `_experience_turn` 的自动截图同样附原图（摘要仍进胶囊/记忆）；metrics 加 `looks`。
+- `planner/l1.py`：`Chain.steps` 记录最近一批步骤（收尾判断有没有 snapshot）。
+- `yuki-bot/sidecar/skills/snapshot.js`（新）：只做身体的事——按 yaw/pitch 或坐标转头、等 400ms 同步、报视角；
+  注册进 `skills/index.js`；`tasks.js::summarize` 补文案（"拍了张画面，照现在的方向"）。
+- 测试：`planner/tests/test_look.py` 28 项（闸门绕过/黑屏判废/attachable/L1 工具流/L2 收尾补图/路由/schema）；
+  `test_capsule` 的 turn stub 兼容 `image_path`；`skills-test.js` 15→16 并加 snapshot 校验。
+
+**真机验证（本机 server-test :25566 + world-join --camera）**
+- L1 自己看：`/chat`「你抬头看一眼周围」→ `look.ok=true`，她说"沙地、砂岩台阶、远处枯死的灌木"（**from 图**）；
+  trace 里 `l1_after_task` 最后一条消息是 `['text','image_url']`，prompt 896 tokens。
+- L2 规划：`/dispatch`「拍一张眼前的画面」→ L2 输出 `{"skill":"snapshot","args":{"reason":…}}` → 侧车
+  `task_done summary="拍了张画面，照现在的方向"` → planner `look_taken` 抓图 → L1 收到原图（1507 prompt tokens）。
+- 顺手修了 `world-join.sh` 的进服判据（客户端日志里没有 "joined the game"），现在能正确显示"客户端已进服"。
+
+**全量测试**：domains 46、capsule 55、attention 66、mind_events 17、p2 30/31（既有）、look 28；
+sidecar observer 85、experience 30、skills 47。
+
+**未做/待确认**
+- `test_memory` 2 项红：工作区里 `prompts.recall_block` 被改成了「【过去的回忆】：」，而测试断言 `startswith("【回忆】")`。
+  这不是本次改动，没擅自回退，等机主定（改文案 or 改测试）。
+- 「让 L2 真的规划 goto+snapshot 的组合」没真机跑过；注意力自动截图附原图也没真机验（单测覆盖 attachable）。
+- 成本观察：一次看图约 1–1.5k prompt token；不设上限，按机主要求，只在 stats/log 里计数。

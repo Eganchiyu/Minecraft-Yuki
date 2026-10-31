@@ -129,11 +129,18 @@ if [ "$CAMERA" = "1" ]; then
   bash "$ROOT/scripts/mc-client-headless.sh" --server "$HOST:$PORT" --user "$CAM_USER" \
     --display "$DISPLAY_NUM" --size "$SIZE" --mem "$MEM" > "$RUN/camera.log" 2>&1
 
+  # 客户端日志里没有「joined the game」（那条广播只发给别人），用 Connecting 之后是否掉线判断
+  client_online () {
+    grep -qa 'Connecting to ' /tmp/mc-client/client.log 2>/dev/null || return 1
+    local tail_log
+    tail_log=$(awk '/Connecting to /{buf=""} {buf=buf $0 "\n"} END{print buf}' /tmp/mc-client/client.log 2>/dev/null)
+    ! printf '%s' "$tail_log" | grep -qaE 'Connection lost|Disconnected|Internal Exception'
+  }
   for _ in $(seq 1 120); do
-    grep -qaE 'joined the game|加入了游戏' /tmp/mc-client/client.log 2>/dev/null && break
+    client_online && break
     sleep 1
   done
-  if grep -qaE 'joined the game|加入了游戏' /tmp/mc-client/client.log 2>/dev/null; then
+  if client_online; then
     echo "[join] 客户端已进服"
   else
     echo "[join] 客户端 120 秒内没进服，见 /tmp/mc-client/client.log（其余进程继续跑）"

@@ -50,16 +50,17 @@ const dup = Object.keys(RECIPES).filter((k) => RECIPES[k] === k)
 check('烧炼表没有自环', dup.length === 0, dup.join(','))
 
 // ---------- 4. 技能注册 ----------
-for (const name of ['smelt', 'sleep', 'use']) {
+for (const name of ['smelt', 'sleep', 'use', 'snapshot']) {
   check(`注册了 ${name}`, SKILL_NAMES.includes(name) && typeof getSkill(name).run === 'function')
 }
-check('技能总数为 15', SKILL_NAMES.length === 15, String(SKILL_NAMES.length))
+check('技能总数为 16', SKILL_NAMES.length === 16, String(SKILL_NAMES.length))
 
 // ---------- 5. 意图校验接受新技能 ----------
 const good = [
   { skill: 'smelt', args: { input: 'raw_iron', count: 3 } },
   { skill: 'sleep', args: {} },
-  { skill: 'use', args: { block: 'oak_door' } }
+  { skill: 'use', args: { block: 'oak_door' } },
+  { skill: 'snapshot', args: { reason: '看看山下' } }
 ]
 for (const step of good) {
   check(`意图校验接受 ${step.skill}`, validateIntention({ steps: [step] }).ok)

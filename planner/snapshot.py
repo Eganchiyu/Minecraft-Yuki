@@ -33,7 +33,7 @@ class SnapshotScheduler:
         self._grabber = grabber or self._ffmpeg_grab
         self._taken_at: list[float] = []
         self._per_event: dict[str, int] = {}
-        self.stats = {"asked": 0, "taken": 0, "skipped": 0, "failed": 0, "looked": 0}
+        self.stats = {"asked": 0, "taken": 0, "skipped": 0, "failed": 0, "looked": 0, "demand": 0}
 
     # ---------- 闸门 ----------
     def allowed(self, fact: dict, context: dict | None = None, now: float | None = None) -> tuple[bool, str]:
@@ -180,6 +180,45 @@ class SnapshotScheduler:
         await asyncio.to_thread(self._prune)
         log.info("snapshot_taken id=%s path=%s", fact.get("id"), path)
         return {"ok": True, "path": str(path), "name": path.name, "at": now, "visual": f"snapshot:{path.name}"}
+
+    async def capture(self, kind: str = "look", hint: str = "", look_at: dict | None = None) -> dict:
+        """按需抓一张：**不查事件闸门**（min_gap / per_hour / event_quota 都不看）。
+
+        L1 主动「看一眼」与 L2 的 snapshot 技能都走这里——机主要求不看频率上限，由她自己决定。
+        仍然保留画面可用性检查：黑屏/单色不是限流，是防止视觉模型把一片黑描述成幻觉。
+        """
+        if not self.opts.get("enabled", False):
+            # enabled 只管「自动调度」，按需抓图不看它；但要保证 dir 等参数在
+            self.opts = {**self.opts}
+        now = self.now()
+        if self.opts.get("look_before") and look_at and self.sidecar is not None:
+            try:
+                await self.sidecar.look(look_at)
+                self.stats["looked"] += 1
+            except Exception as exc:  # 转向失败不影响截图
+                log.warning("look_before_failed error=%s", exc)
+        fact = {"id": f"look-{int(now)}", "kind": kind, "detail": {"hint": hint[:120]}}
+        path = self._target_path(fact, now)
+        taken, error = await asyncio.to_thread(self._grabber, path)
+        if not taken:
+            self.stats["failed"] += 1
+            log.warning("look_failed error=%s", error)
+            return {"ok": False, "error": error}
+        usable, why = await asyncio.to_thread(self._usable, path)
+        if not usable:
+            self.stats["failed"] += 1
+            log.info("look_unusable reason=%s", why)
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            return {"ok": False, "error": why}
+        self._taken_at.append(now)
+        self.stats["taken"] += 1
+        self.stats["demand"] = self.stats.get("demand", 0) + 1
+        await asyncio.to_thread(self._prune)
+        log.info("look_taken path=%s hint=%s", path, hint[:40])
+        return {"ok": True, "path": str(path), "name": path.name, "at": now}
 
     def snapshot(self) -> dict:
         return {

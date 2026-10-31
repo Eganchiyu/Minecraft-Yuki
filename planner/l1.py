@@ -221,6 +221,7 @@ class Chain:
         self.intention_ids: list[str] = []
         self.domain = ""      # 第一次规划定下的域，重规划沿用它，避免两段计划跨域打架
         self.notes = ""       # L2 留下的提醒，任务收尾时随结果一起交给 L1
+        self.steps: list[dict] = []   # 最近一批步骤（收尾时判断有没有 snapshot）
 
 
 def state_text(state: dict) -> str:

@@ -6,7 +6,7 @@ ON_FAIL = {"retry", "abort", "skip"}
 # 全部技能。一次规划只放行其中一个域的子集（domains.py），这里的全集用于兜底域与合法性自检。
 SKILLS = frozenset({
     "mine", "goto", "follow", "craft", "deposit", "attack", "eat", "equip", "place", "roam", "drop", "open",
-    "smelt", "sleep", "use",
+    "smelt", "sleep", "use", "snapshot",
 })
 EQUIP_SLOTS = {"hand", "off-hand", "head", "torso", "legs", "feet"}
 MAX_OPTIONS = 3
@@ -192,6 +192,17 @@ def _normalize_step(step: Any, index: int, allowed: frozenset = SKILLS) -> dict:
             clean.update(coords)
         if args.get("radius") is not None:
             clean["radius"] = _int_range(args.get("radius"), f"steps[{index}].args.radius", 1, 32)
+    elif skill == "snapshot":
+        clean = {}
+        if args.get("reason") is not None:
+            clean["reason"] = _str(args.get("reason"), f"steps[{index}].args.reason", 60)
+        if args.get("yaw") is not None:
+            clean["yaw"] = _int_range(args.get("yaw"), f"steps[{index}].args.yaw", -180, 360)
+        if args.get("pitch") is not None:
+            clean["pitch"] = _int_range(args.get("pitch"), f"steps[{index}].args.pitch", -90, 90)
+        coords = _coords(args, index, required=False)
+        if coords:
+            clean.update(coords)
     elif skill == "roam":
         clean = {}
         if args.get("radius") is not None:

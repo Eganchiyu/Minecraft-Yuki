@@ -197,6 +197,17 @@ MEMORY = {
 
 # P2 单任务预算：一条委托从听见到最终汇报的总开销上限。
 # LLMClient 每次真实调用记账，超了立即降级成一句人话，不再继续烧。
+# 「看一眼」：L1 主动要画面（look 工具）与 L2 的 snapshot 技能共用。
+# 机主定调：不设频率上限，只靠她自己决定；给 L1 的是原图（多模态），不是文字摘要。
+_LOOK = _RAW.get("look") or {}
+LOOK = {
+    "enabled": bool(_LOOK.get("enabled", True)),
+    # 原图直接进 L1 的消息（成本更高，但看得见细节）
+    "show_image": bool(_LOOK.get("show_image", True)),
+    # 原图太大就拒绝送给 L1（避免一次调用把上下文撑爆）
+    "max_image_bytes": _int(_LOOK.get("max_image_bytes"), 4 * 1024 * 1024),
+}
+
 BUDGET = {
     "max_calls": _int(_BUDGET.get("max_calls"), 10),
     "max_tokens": _int(_BUDGET.get("max_tokens"), 12000),

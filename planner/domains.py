@@ -101,6 +101,19 @@ _INTERACT = Domain(
 先 `open` 看有什么、再如实说拿到了什么；不要规划一套我们做不到的精确操作。""",
 )
 
+_OBSERVE = Domain(
+    name="observe",
+    # 看画面只要她站定、转头；给 goto 是为了「到高处看看」，给 roam 是为了「边走边看」
+    skills=("snapshot", "goto", "roam"),
+    keywords=("看一眼", "看看", "看看周围", "环顾", "四周", "观察", "风景", "拍张", "拍照", "截图", "望远镜", "那是啥", "那是什么"),
+    brief="""## 看画面
+
+- `snapshot` 会真的拍一张她眼前的画面，图直接摆到她面前（她不是靠文字转述知道那是什么）。
+- 想换个方向看就带 `yaw`/`pitch`，或给要看的方块坐标（x/y/z）；不加就照现在的朝向拍。
+- 只规划"看"这一步：别顺手加挖矿/战斗，她看完自己会决定下一步。
+- 站在水里、岩浆边、悬崖下抬头看时画面可能是墙或天空，这不是失败，别重复拍同一个方向。""",
+)
+
 _TRAVEL = Domain(
     name="travel",
     skills=("goto", "follow", "roam", "mine", "place", "drop", "sleep"),
@@ -144,7 +157,7 @@ _COMBAT = Domain(
 
 
 DOMAINS: dict[str, Domain] = {
-    d.name: d for d in (_GATHER, _CRAFT, _INTERACT, _TRAVEL, _COMBAT)
+    d.name: d for d in (_GATHER, _CRAFT, _INTERACT, _TRAVEL, _COMBAT, _OBSERVE)
 }
 
 # 兜底域：一句都没命中就用它，技能全开、没有专家册，行为和加域之前完全一致。
@@ -153,14 +166,14 @@ GENERAL = Domain(
     skills=(
         "mine", "goto", "follow", "craft", "deposit", "attack",
         "eat", "equip", "place", "roam", "drop", "open",
-        "smelt", "sleep", "use",
+        "smelt", "sleep", "use", "snapshot",
     ),
     keywords=(),
 )
 
 # 一句话里出现多个域时，按这个顺序取第一个命中的：
 # 具体动作（合成、存取、战斗）比泛化的"去/来"更能说明意图。
-_PRIORITY = ("craft", "combat", "interact", "gather", "travel")
+_PRIORITY = ("craft", "combat", "interact", "gather", "observe", "travel")
 
 
 def route(text: str) -> Domain:

@@ -19,6 +19,7 @@ from pathlib import Path
 import attention
 import capsule
 import config
+import look
 import prompts
 import snapshot
 import vision
@@ -109,6 +110,8 @@ class Mind:
         self.capsules = capsule.CapsuleLog(config.CAPSULES_PATH)
         self.snapshots = snapshot.SnapshotScheduler(config.SNAPSHOT, self.sidecar, now=time.time)
         self.vision = vision.VisionAdapter(self.llm, config.VISION)
+        # 「看一眼」：L1 的 look 工具与 L2 的 snapshot 技能共用；原图直接进 L1 的上下文
+        self.look = look.Looker(self.snapshots, config.LOOK)
         self._experience_intents: dict[str, str] = {}
         self.notes = NoteStore(config.NOTES_PATH)
         self.history_store = HistoryStore(config.HISTORY_PATH, config.MEMORY["history_max"])
@@ -123,7 +126,7 @@ class Mind:
         self.state: dict = self._load_state()
         self.metrics = {
             "turns": 0, "intentions": 0, "chats": 0, "ticks": 0, "say": 0,
-            "experience": 0, "experience_ignore": 0, "snapshots": 0,
+            "experience": 0, "experience_ignore": 0, "snapshots": 0, "looks": 0,
         }
         self._lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
@@ -209,7 +212,28 @@ class Mind:
             event = self._result_event(status, summary, text, chain.notes if chain else "")
             origin = (chain.origin if chain else "self_play") or "self_play"
             priority = int(current.get("priority") or 5)
-            result = await self._turn(event, origin=origin, priority=priority, kind="after_task", mark_wake=False)
+            # L2 规划了 snapshot：抓一张，原图和结果一起交回 L1（她真的看得见，不是文字转述）
+            shot: dict = {"ok": False}
+            steps = list(getattr(chain, "steps", []) or [])
+            shot_step = next((st for st in steps if str(st.get("skill")) == "snapshot"), None)
+            if shot_step is not None:
+                args = shot_step.get("args") or {}
+                location = None
+                if all(args.get(k) is not None for k in ("x", "y", "z")):
+                    location = {"x": args["x"], "y": args["y"], "z": args["z"]}
+                shot = await self.look.see(str(args.get("reason") or text or "看一眼"), hint=text, look_at=location)
+                if shot.get("ok"):
+                    self.metrics["looks"] += 1
+                else:
+                    event += "（画面没拍到：" + str(shot.get("error") or "unknown")[:40] + "）"
+            result = await self._turn(
+                event, origin=origin, priority=priority, kind="after_task", mark_wake=False,
+                image_path=shot.get("path") if shot.get("ok") else None,
+                image_caption="（这张图就是那一下她眼前的画面。）",
+            )
+            if shot_step is not None:
+                result["look"] = {"ok": bool(shot.get("ok")), "name": shot.get("name"),
+                                  "error": shot.get("error")}
             self._log_chain(chain, intention_id, status, summary)
             self._release_chain(chain)
             await self._record_experience_outcome(intention_id, status, summary)
@@ -262,6 +286,7 @@ class Mind:
             "attention": self.attention.snapshot(),
             "snapshot": self.snapshots.snapshot(),
             "vision": self.vision.snapshot(),
+            "look": self.look.snapshot(),
             "experiences": {
                 "known": len(self.capsules.latest()),
                 "recent": self.capsules.rows()[-3:],
@@ -279,6 +304,7 @@ class Mind:
     async def _turn(
         self, user_text: str, origin: str, priority: int, kind: str,
         allow_tools: bool = True, mark_wake: bool = True,
+        image_path: str | None = None, image_caption: str = "",
     ) -> dict:
         """一次模型调用 = 一句回话，或一个 intention，或两者都有。
 
@@ -303,10 +329,24 @@ class Mind:
         memory_block = prompts.recall_block(self._recall(user_text, kind))
         if memory_block:
             messages.append({"role": "system", "content": memory_block})
-        messages += [
-            *self.history[-config.HISTORY_KEEP * 2:],
-            {"role": "user", "content": f"{user_text}\n{status_line}"},
-        ]
+        user_content = f"{user_text}\n{status_line}"
+        attach, why = self.look.attachable(image_path)
+        if attach and image_caption:
+            user_content = f"{user_content}\n{image_caption}"
+        messages += [*self.history[-config.HISTORY_KEEP * 2:]]
+        if attach:
+            # 原图直接给 L1 看：她自己认画面，不靠视觉模型转述
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_content},
+                    {"type": "image_url", "image_url": {"url": look.data_url(image_path)}},
+                ],
+            })
+        else:
+            if image_path and not attach:
+                log.info("look_image_skipped", reason=why)
+            messages.append({"role": "user", "content": user_content})
         self.metrics["turns"] += 1
         self._roll_daily()
         if kind in {"idle", "event", "after_task", "experience"}:
@@ -316,7 +356,7 @@ class Mind:
             raw = await self.llm.chat(
                 messages,
                 purpose=f"l1_{kind}",
-                tools=[prompts.INTENTION_TOOL] if allow_tools else None,
+                tools=[prompts.INTENTION_TOOL, prompts.LOOK_TOOL] if allow_tools else None,
                 max_tokens=config.AUTONOMY["max_tokens"],
                 temperature=0.85,
             )
@@ -328,8 +368,16 @@ class Mind:
         intention_id = None
         intention_text = ""
         dispatch_error = ""
+        look_reason = ""
         for call in raw.get("tool_calls") or []:
             function = call.get("function") or {}
+            if function.get("name") == "look":
+                try:
+                    args = json.loads(function.get("arguments") or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                look_reason = " ".join(str(args.get("reason") or "").split()).strip()[:80]
+                continue
             if function.get("name") != "intention":
                 continue
             try:
@@ -367,6 +415,14 @@ class Mind:
         log.info("turn", kind=kind, say=say[:40], intention=intention_text[:40])
         result = {"say": say, "intention_id": intention_id, "intention": intention_text, "action": kind}
 
+        # 她主动要画面：抓一张，原图塞回上下文让她自己说（不看频率上限，由她决定）
+        if look_reason and allow_tools:
+            looked = await self._look_turn(look_reason, origin, priority, kind, fallback_say=say)
+            if intention_id:
+                looked["intention_id"] = intention_id
+                looked["intention"] = intention_text
+            return looked
+
         # 派活失败（尤其是「功能还没做」）必须让她知道，否则她会以为世界不配合
         if dispatch_error and intention_text and allow_tools:
             notice = self._dispatch_failure_message(intention_text, dispatch_error)
@@ -376,6 +432,45 @@ class Mind:
                 follow = await self._turn(notice, origin=origin, priority=priority, kind="after_task", allow_tools=False)
                 result["say_after"] = follow.get("say", "")
                 result["notice"] = notice
+        return result
+
+    # ================= 「看一眼」 =================
+    async def _look_turn(
+        self, reason: str, origin: str, priority: int, kind: str,
+        fallback_say: str = "", location: dict | None = None,
+    ) -> dict:
+        """抓一张 → 原图进上下文 → 让她用自己的话描述。
+
+        拍不到（没有虚拟屏客户端 / 黑屏 / 单色）就如实告诉她"眼睛看不见"，
+        不去编画面——这是她能分清"看到"和"猜到"的前提。
+        """
+        shot = await self.look.see(reason or "看一眼", hint=reason, look_at=location)
+        if not shot.get("ok"):
+            notice = "眼睛这会儿看不见（没有虚拟屏客户端，或者画面拍废了），别指望画面。"
+            self._set_note(notice)
+            self._save_state()
+            log.info("look_unavailable", reason=reason[:40], error=str(shot.get("error"))[:80])
+            result = await self._turn(
+                f"（你想看一眼{'「' + reason + '」' if reason else ''}，但{notice}）",
+                origin=origin, priority=priority, kind="after_task",
+                allow_tools=False, mark_wake=False,
+            )
+            if not result.get("say") and fallback_say:
+                result["say"] = fallback_say
+            result["look"] = {"ok": False, "error": shot.get("error")}
+            return result
+
+        self.metrics["looks"] += 1
+        caption = "（这张图就是你此刻眼前的画面。用你自己的话描述你看到了什么、想做什么。）"
+        result = await self._turn(
+            f"（你抬头看了一眼：{reason or '眼前'}）",
+            origin=origin, priority=priority, kind="after_task",
+            allow_tools=False, mark_wake=False,
+            image_path=shot["path"], image_caption=caption,
+        )
+        if not result.get("say") and fallback_say:
+            result["say"] = fallback_say
+        result["look"] = {"ok": True, "name": shot.get("name")}
         return result
 
     # ================= 派活（L2 + L3） =================
@@ -424,6 +519,7 @@ class Mind:
         except Exception as exc:
             return {"ok": False, "error": f"sidecar_unreachable: {exc}"}
         chain.intention_ids.append(intention_id)
+        chain.steps = list(steps)
         self.chains[intention_id] = chain
         self._prune_chains()
         self.last_budget = chain.budget.snapshot()
@@ -540,7 +636,9 @@ class Mind:
                 return None
             self.metrics["experience"] += 1
             result = await self._turn(
-                capsule.capsule_prompt(cap), origin="self_play", priority=priority, kind="experience"
+                capsule.capsule_prompt(cap), origin="self_play", priority=priority, kind="experience",
+                image_path=shot.get("path") if shot.get("ok") else None,
+                image_caption="（这张图就是她注意到那件事时的画面。）",
             )
 
         say = str(result.get("say") or "")

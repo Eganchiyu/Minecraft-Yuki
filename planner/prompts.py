@@ -47,6 +47,27 @@ INTENTION_TOOL = {
     },
 }
 
+LOOK_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "look",
+        "description": (
+            "看一眼自己眼前到底是什么样（会真的截图，图会直接摆在你面前）。"
+            "不确定周围环境、想描述画面、或想确认刚才发生了什么时调用；纯聊天不要调用。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "你想看什么，一句中文，例如「看看前面是什么」「看看哥哥在哪」",
+                },
+            },
+            "required": ["reason"],
+        },
+    },
+}
+
 # ---- 技能行：每个技能一行参数说明，按域裁剪后才进 system prompt ----
 SKILL_LINES = {
     "mine": '1. mine — 采集方块。args: {"block":"<方块ID>","count":1-64}',
@@ -64,6 +85,7 @@ SKILL_LINES = {
     "smelt": '13. smelt — 用熔炉烧东西（铁矿石/粗铁→铁锭，沙子→玻璃，生肉→熟肉，原木→木炭）。没有熔炉会把背包里的放一个。很慢，一次最多 8 个。args: {"input":"<原料ID>","count":1-8,"x":整数,"y":整数,"z":整数(可选),"radius":1-32(可选)}',
     "sleep": '14. sleep — 睡一觉把夜晚跳过去（需要附近有床，白天睡不了）。args: {"x":整数,"y":整数,"z":整数(可选)}',
     "use": '15. use — 对一格方块或一个生物按右键：开门、按按钮、拉杆、床、工作台、和村民说话。args: {"block":"<方块ID>","entity":"<实体ID>"(二选一),"x":整数,"y":整数,"z":整数(可选),"radius":1-32(可选)}',
+    "snapshot": '16. snapshot — 拍一张自己眼前的画面（会真的截图，图直接给她看）。可以顺手转头：给 yaw/pitch 或看向某格坐标。args: {"reason":"<一句>","yaw":-180到180(可选),"pitch":-90到90(可选),"x":整数,"y":整数,"z":整数(可选)}',
 }
 
 # ---- 每个技能的一条真实例子：输出格式的示范用它，换域就换例子 ----
@@ -83,6 +105,7 @@ SKILL_EXAMPLES = {
     "smelt": '{"skill":"smelt","args":{"input":"raw_iron","count":4},"on_fail":"retry"}',
     "sleep": '{"skill":"sleep","args":{},"on_fail":"retry"}',
     "use": '{"skill":"use","args":{"block":"oak_door"},"on_fail":"retry"}',
+    "snapshot": '{"skill":"snapshot","args":{"reason":"看看山下有什么"},"on_fail":"skip"}',
 }
 
 # ---- 通用规则：(这条规则需要的技能, 文本)。需要的技能不在本域就不发这一条 ----
@@ -265,5 +288,5 @@ def recall_block(items: list[dict[str, Any]]) -> str:
         lines.append(f"· {at} {text}" if at else f"· {text}")
     if not lines:
         return ""
-    return "【回忆】这个世界里以前发生过这些事（是过去，不是现在）：\n" + "\n".join(lines)
+    return "【过去的回忆】：\n" + "\n".join(lines)
 
